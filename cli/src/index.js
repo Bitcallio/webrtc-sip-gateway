@@ -34,7 +34,7 @@ const {
 } = require("../lib/system");
 const { readTemplate, renderTemplate } = require("../lib/template");
 
-const PACKAGE_VERSION = "0.2.2";
+const PACKAGE_VERSION = "0.2.3";
 
 function detectComposeCommand() {
   if (run("docker", ["compose", "version"], { check: false }).status === 0) {
