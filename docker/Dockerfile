@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ghcr.io/kamailio/kamailio:5.7.5-bullseye
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG S6_OVERLAY_VERSION=3.2.0.2
@@ -9,39 +9,31 @@ ENV S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
     RTPENGINE_MIN_PORT=10000 \
     RTPENGINE_MAX_PORT=10100
 
+# Base runtime deps + tools to add apt repo keys
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        gnupg \
-        software-properties-common \
-        xz-utils \
-    && add-apt-repository --yes universe \
-    && rm -rf /var/lib/apt/lists/*
+  && apt-get install -y --no-install-recommends \
+      ca-certificates curl python3 xz-utils \
+      gnupg wget procps \
+  && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://deb.kamailio.org/kamailiodebkey.gpg \
-      | gpg --dearmor -o /usr/share/keyrings/kamailio.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/kamailio.gpg] http://deb.kamailio.org/kamailio57 noble main" \
-      > /etc/apt/sources.list.d/kamailio.list
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        kamailio \
-        kamailio-modules \
-        python3 \
-        rtpengine-daemon \
-    && rm -rf /var/lib/apt/lists/*
-
+# Add RTPengine apt repo (bullseye) maintained by Kamailio community
+# Repo list is published here: https://deb.kamailio.org/rtpengine.html
 RUN set -eux; \
-    case "${TARGETARCH}" in \
-      amd64) S6_ARCH="x86_64" ;; \
-      arm64) S6_ARCH="aarch64" ;; \
-      *) echo "Unsupported arch: ${TARGETARCH}"; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" \
-      | tar -C / -Jxpf -; \
-    curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" \
-      | tar -C / -Jxpf -
+  wget -qO- http://deb.kamailio.org/kamailiodebkey.gpg \
+    | gpg --dearmor -o /usr/share/keyrings/kamailio-archive.gpg; \
+  echo "deb [signed-by=/usr/share/keyrings/kamailio-archive.gpg] http://deb.kamailio.org/rtpengine-mr13.5 bullseye main" \
+    > /etc/apt/sources.list.d/rtpengine.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends rtpengine; \
+  rm -rf /var/lib/apt/lists/*
+
+# Install s6-overlay
+RUN set -eux; \
+  S6_ARCH="x86_64"; \
+  curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" \
+    | tar -C / -Jxpf -; \
+  curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" \
+    | tar -C / -Jxpf -
 
 COPY kamailio/kamailio.cfg /etc/kamailio/kamailio.cfg
 COPY healthcheck/healthcheck_server.py /opt/bitcall/healthcheck_server.py
@@ -51,6 +43,7 @@ RUN chmod +x /etc/cont-init.d/* /etc/services.d/*/run
 
 EXPOSE 80/tcp 5060/tcp 5060/udp 2223/udp 10000-10100/udp
 
-HEALTHCHECK --interval=10s --timeout=3s --retries=6 CMD curl -fsS http://127.0.0.1/.well-known/acme-challenge/healthcheck || exit 1
+HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
+  CMD curl -fsS http://127.0.0.1/.well-known/acme-challenge/healthcheck || exit 1
 
 ENTRYPOINT ["/init"]
