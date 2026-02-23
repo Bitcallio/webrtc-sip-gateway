@@ -45,6 +45,14 @@ jobs:
       - name: Verify Kamailio config syntax
         run: docker run --rm --entrypoint /usr/sbin/kamailio webrtc-sip-gateway:ci -c -f /etc/kamailio/kamailio.cfg
 
+      - name: Verify NATMANAGE enforces IPv4 on SIP->WebRTC
+        run: |
+          docker run --rm --entrypoint /bin/sh webrtc-sip-gateway:ci -lc '
+            awk "/route\\[NATMANAGE\\]/{in_block=1} in_block{print} /route\\[RELAY\\]/{in_block=0}" /etc/kamailio/kamailio.cfg |
+            grep -F "ICE=force" |
+            grep -F "address-family=IP4"
+          '
+
       - name: Generate temporary TLS cert for runtime tests
         run: |
           mkdir -p "$GITHUB_WORKSPACE/.ci-ssl"
