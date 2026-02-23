@@ -5,8 +5,8 @@ services:
     network_mode: host
     read_only: true
     tmpfs:
-      - /tmp
-      - /run
+      - /tmp:rw,nosuid,nodev
+      - /run:rw,exec,nosuid,nodev
     security_opt:
       - no-new-privileges:true
     env_file: .env

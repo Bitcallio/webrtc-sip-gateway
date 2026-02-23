@@ -14,7 +14,7 @@ Bitcall WebRTC-to-SIP gateway repository.
 sudo apt-get update && sudo apt-get install -y curl ca-certificates
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.1
+sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.2
 sudo bitcall-gateway init
 ```
 

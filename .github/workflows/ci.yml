@@ -45,6 +45,45 @@ jobs:
       - name: Verify Kamailio config syntax
         run: docker run --rm --entrypoint /usr/sbin/kamailio webrtc-sip-gateway:ci -c -f /etc/kamailio/kamailio.cfg
 
+      - name: Generate temporary TLS cert for runtime tests
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.ci-ssl"
+          openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+            -subj "/CN=gw.example.com" \
+            -keyout "$GITHUB_WORKSPACE/.ci-ssl/key.pem" \
+            -out "$GITHUB_WORKSPACE/.ci-ssl/cert.pem"
+
+      - name: Runtime smoke (read-only + tmpfs /run exec)
+        run: |
+          docker run -d --name gwsmoke \
+            --read-only \
+            --tmpfs /tmp:rw,nosuid,nodev \
+            --tmpfs /run:rw,exec,nosuid,nodev \
+            -e DOMAIN=gw.example.com \
+            -e TURN_SECRET=test-secret \
+            -e TURN_TTL=3600 \
+            -e ALLOWED_SIP_DOMAINS= \
+            -v "$GITHUB_WORKSPACE/.ci-ssl/cert.pem:/etc/ssl/cert.pem:ro" \
+            -v "$GITHUB_WORKSPACE/.ci-ssl/key.pem:/etc/ssl/key.pem:ro" \
+            -p 18082:80 \
+            -p 18443:443 \
+            -p 15060:5060/tcp \
+            -p 15060:5060/udp \
+            webrtc-sip-gateway:ci
+          sleep 12
+
+      - name: Verify runtime smoke process + listeners
+        run: |
+          if ! docker exec gwsmoke sh -lc 'comm="$(cat /proc/1/comm)"; [ "$comm" = "init" ] || [ "$comm" = "s6-svscan" ]'; then
+            docker logs gwsmoke || true
+            exit 1
+          fi
+
+          if ! docker exec gwsmoke sh -lc 'ss -lntup | egrep "(:80|:443|:5060)"'; then
+            docker logs gwsmoke || true
+            exit 1
+          fi
+
       - name: Boot container
         run: |
           docker run -d --name webrtc-sip-gateway-ci \
@@ -52,6 +91,8 @@ jobs:
             -e TURN_SECRET=test-secret \
             -e TURN_TTL=3600 \
             -e ALLOWED_SIP_DOMAINS= \
+            -v "$GITHUB_WORKSPACE/.ci-ssl/cert.pem:/etc/ssl/cert.pem:ro" \
+            -v "$GITHUB_WORKSPACE/.ci-ssl/key.pem:/etc/ssl/key.pem:ro" \
             -p 18080:80 \
             webrtc-sip-gateway:ci
           sleep 12
@@ -87,6 +128,8 @@ jobs:
         run: |
           docker run -d --name webrtc-sip-gateway-ci-no-turn \
             -e DOMAIN=gw.example.com \
+            -v "$GITHUB_WORKSPACE/.ci-ssl/cert.pem:/etc/ssl/cert.pem:ro" \
+            -v "$GITHUB_WORKSPACE/.ci-ssl/key.pem:/etc/ssl/key.pem:ro" \
             -p 18081:80 \
             webrtc-sip-gateway:ci
           sleep 10
@@ -114,10 +157,13 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        run: docker logs webrtc-sip-gateway-ci
+        run: |
+          docker logs gwsmoke || true
+          docker logs webrtc-sip-gateway-ci || true
 
       - name: Cleanup
         if: always()
         run: |
+          docker rm -f gwsmoke || true
           docker rm -f webrtc-sip-gateway-ci || true
           docker rm -f webrtc-sip-gateway-ci-no-turn || true
