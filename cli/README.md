@@ -5,7 +5,7 @@ Linux-only CLI to install and operate the Bitcall WebRTC-to-SIP gateway.
 ## Install
 
 ```bash
-sudo npm i -g @bitcall/webphone-gateway
+sudo npm i -g @bitcall/webphone-gateway@0.2.0
 ```
 
 ## Main workflow

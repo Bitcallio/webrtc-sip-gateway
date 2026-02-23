@@ -1,6 +1,6 @@
 {
   "name": "@bitcall/webphone-gateway",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "description": "Linux CLI for bootstrapping and managing the Bitcall WebRTC-to-SIP Gateway",
   "license": "MIT",
   "bin": {

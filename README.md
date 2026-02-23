@@ -14,7 +14,7 @@ Bitcall WebRTC-to-SIP gateway repository.
 sudo apt-get update && sudo apt-get install -y curl ca-certificates
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm i -g @bitcall/webphone-gateway
+sudo npm i -g @bitcall/webphone-gateway@0.2.0
 sudo bitcall-gateway init
 ```
 
@@ -69,4 +69,14 @@ curl -k -i -N \
 ```bash
 sudo ss -ltnup | grep -E ':(443|5060|5061)\b'
 sudo systemctl is-enabled bitcall-gateway
+```
+
+## Release operations
+
+Docker image publish is automated on git tag push (`v*`) via `.github/workflows/publish-image.yml`.
+NPM publish is manual:
+
+```bash
+cd cli
+npm publish --access public --provenance
 ```
