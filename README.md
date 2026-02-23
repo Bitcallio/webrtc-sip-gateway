@@ -5,7 +5,7 @@ Bitcall WebRTC-to-SIP gateway repository.
 ## Components
 
 - `docker/`: Gateway image (Kamailio + rtpengine + healthcheck responder)
-- `cli/`: Linux npm CLI `@bitcall/webphone-gateway`
+- `cli/`: Linux npm CLI `@bitcall/webrtc-sip-gateway`
 - `.github/workflows/`: CI
 
 ## End-user install (VPS)
@@ -14,7 +14,7 @@ Bitcall WebRTC-to-SIP gateway repository.
 sudo apt-get update && sudo apt-get install -y curl ca-certificates
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm i -g @bitcall/webphone-gateway@0.2.0
+sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.1
 sudo bitcall-gateway init
 ```
 
@@ -74,9 +74,12 @@ sudo systemctl is-enabled bitcall-gateway
 ## Release operations
 
 Docker image publish is automated on git tag push (`v*`) via `.github/workflows/publish-image.yml`.
-NPM publish is manual:
+NPM package publish is automated on git tag push (`v*`) via `.github/workflows/publish-npm.yml`.
 
 ```bash
-cd cli
-npm publish --access public --provenance
+# 1) bump cli/package.json version
+# 2) commit
+# 3) tag vX.Y.Z
+# 4) push main + tags
+git push origin main --tags
 ```

@@ -1,11 +1,11 @@
-# @bitcall/webphone-gateway
+# @bitcall/webrtc-sip-gateway
 
 Linux-only CLI to install and operate the Bitcall WebRTC-to-SIP gateway.
 
 ## Install
 
 ```bash
-sudo npm i -g @bitcall/webphone-gateway@0.2.0
+sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.1
 ```
 
 ## Main workflow
@@ -36,3 +36,10 @@ sudo bitcall-gateway logs -f
 - `/opt/bitcall-gateway/docker-compose.yml`
 - `/opt/bitcall-gateway/acme-webroot/.well-known/acme-challenge/healthcheck`
 - `/etc/systemd/system/bitcall-gateway.service`
+
+## Publishing npm package
+
+1. Bump version in `cli/package.json`.
+2. Commit the change.
+3. Create tag `vX.Y.Z`.
+4. Push tags; GitHub Actions publishes automatically.
