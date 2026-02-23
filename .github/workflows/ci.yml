@@ -42,11 +42,20 @@ jobs:
       - name: Build image
         run: docker build --pull -t webrtc-sip-gateway:ci ./docker
 
-      - name: Verify MEDIA_IPV6 default env is 0 in image
-        run: docker run --rm --entrypoint /bin/sh webrtc-sip-gateway:ci -lc '[ "${MEDIA_IPV6:-}" = "0" ]'
+      - name: Verify media env defaults in image
+        run: docker run --rm --entrypoint /bin/sh webrtc-sip-gateway:ci -lc '[ "${MEDIA_IPV6:-}" = "0" ] && [ "${MEDIA_FORCE_IPV4:-}" = "1" ]'
 
       - name: Verify Kamailio config syntax
         run: docker run --rm --entrypoint /usr/sbin/kamailio webrtc-sip-gateway:ci -c -f /etc/kamailio/kamailio.cfg
+
+      - name: Verify textopsx + IPv6 strip logic are present
+        run: |
+          docker run --rm --entrypoint /bin/sh webrtc-sip-gateway:ci -lc '
+            test -f /usr/lib/x86_64-linux-gnu/kamailio/modules/textopsx.so &&
+            grep -F "loadmodule \"textopsx.so\"" /etc/kamailio/kamailio.cfg &&
+            grep -F "MEDIA_FORCE_IPV4" /etc/kamailio/kamailio.cfg &&
+            grep -F "SDP IPv6 strip applied" /etc/kamailio/kamailio.cfg
+          '
 
       - name: Verify NATMANAGE enforces IPv4 on SIP->WebRTC
         run: |
@@ -72,6 +81,7 @@ jobs:
             --tmpfs /run:rw,exec,nosuid,nodev \
             -e DOMAIN=gw.example.com \
             -e MEDIA_IPV6=0 \
+            -e MEDIA_FORCE_IPV4=1 \
             -e TURN_SECRET=test-secret \
             -e TURN_TTL=3600 \
             -e ALLOWED_SIP_DOMAINS= \

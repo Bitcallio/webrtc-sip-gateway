@@ -5,7 +5,7 @@ Linux-only CLI to install and operate the Bitcall WebRTC-to-SIP gateway.
 ## Install
 
 ```bash
-sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.4
+sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.5
 ```
 
 ## Main workflow
@@ -16,8 +16,10 @@ sudo bitcall-gateway status
 sudo bitcall-gateway logs -f
 ```
 
-Default media policy is IPv4-only candidates (`MEDIA_IPV6=0`). Set
-`MEDIA_IPV6=1` in `/opt/bitcall-gateway/.env` only if you want IPv6 candidates.
+Default media policy is IPv4-only (`MEDIA_IPV6=0` and `MEDIA_FORCE_IPV4=1`),
+including IPv6 candidate stripping on SIP->WebRTC SDP. Set `MEDIA_IPV6=1`
+and `MEDIA_FORCE_IPV4=0` in `/opt/bitcall-gateway/.env` only if you want
+IPv6 candidates.
 
 ## Commands
 

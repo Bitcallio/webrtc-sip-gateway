@@ -34,7 +34,7 @@ const {
 } = require("../lib/system");
 const { readTemplate, renderTemplate } = require("../lib/template");
 
-const PACKAGE_VERSION = "0.2.4";
+const PACKAGE_VERSION = "0.2.5";
 
 function detectComposeCommand() {
   if (run("docker", ["compose", "version"], { check: false }).status === 0) {
@@ -104,6 +104,7 @@ function envOrder() {
     "INTERNAL_WSS_PORT",
     "INTERNAL_WS_PORT",
     "MEDIA_IPV6",
+    "MEDIA_FORCE_IPV4",
     "RTPENGINE_MIN_PORT",
     "RTPENGINE_MAX_PORT",
     "WITH_REVERSE_PROXY",
@@ -474,6 +475,13 @@ async function runWizard(existing = {}, preflight = {}) {
       existing.MEDIA_IPV6 === "1"
     );
 
+    const mediaForceIpv4Enabled = await prompt.askYesNo(
+      "Force IPv4-only SDP candidates? (default: Yes)",
+      existing.MEDIA_FORCE_IPV4
+        ? existing.MEDIA_FORCE_IPV4 === "1"
+        : !mediaIpv6Enabled
+    );
+
     const configureUfw = await prompt.askYesNo("Configure ufw firewall rules now", true);
 
     const config = {
@@ -499,6 +507,7 @@ async function runWizard(existing = {}, preflight = {}) {
       turnExternalCredential,
       webphoneOrigin,
       mediaIpv6: mediaIpv6Enabled ? "1" : "0",
+      mediaForceIpv4: mediaForceIpv4Enabled ? "1" : "0",
       rtpMin: "10000",
       rtpMax: "20000",
       acmeListenPort: deployMode === "reverse-proxy" ? "8080" : "80",
@@ -517,6 +526,7 @@ async function runWizard(existing = {}, preflight = {}) {
     console.log(`  Allowed SIP domains: ${config.allowedDomains || "(empty/dev-mode)"}`);
     console.log(`  TURN mode: ${config.turnMode}`);
     console.log(`  IPv6 media candidates: ${config.mediaIpv6 === "1" ? "enabled" : "disabled (IPv4-only)"}`);
+    console.log(`  Force IPv4 SDP strip: ${config.mediaForceIpv4 === "1" ? "enabled" : "disabled"}`);
 
     const proceed = await prompt.askYesNo("Proceed with provisioning", true);
     if (!proceed) {
@@ -566,6 +576,7 @@ function renderEnvContent(config, tlsCert, tlsKey) {
     INTERNAL_WSS_PORT: config.internalWssPort,
     INTERNAL_WS_PORT: config.internalWsPort,
     MEDIA_IPV6: config.mediaIpv6,
+    MEDIA_FORCE_IPV4: config.mediaForceIpv4,
   });
 
   let extra = "";
@@ -782,6 +793,7 @@ function statusCommand() {
   console.log(`Port 5060: ${formatMark(p5060.inUse)} listening`);
   console.log(`rtpengine control: ${formatMark(rtpReady)} reachable`);
   console.log(`IPv6 media candidates: ${(envMap.MEDIA_IPV6 || "0") === "1" ? "enabled" : "disabled (IPv4-only)"}`);
+  console.log(`Force IPv4 SDP strip: ${(envMap.MEDIA_FORCE_IPV4 || "1") === "1" ? "enabled" : "disabled"}`);
   if (envMap.TURN_MODE && envMap.TURN_MODE !== "none") {
     console.log(`/turn-credentials: ${formatMark(turnReady)} reachable`);
   }
@@ -800,6 +812,7 @@ function statusCommand() {
   console.log(`ALLOWED_SIP_DOMAINS=${envMap.ALLOWED_SIP_DOMAINS || ""}`);
   console.log(`TURN_MODE=${envMap.TURN_MODE || "none"}`);
   console.log(`MEDIA_IPV6=${envMap.MEDIA_IPV6 || "0"}`);
+  console.log(`MEDIA_FORCE_IPV4=${envMap.MEDIA_FORCE_IPV4 || "1"}`);
 }
 
 function certStatusCommand() {

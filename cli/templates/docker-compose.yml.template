@@ -12,6 +12,7 @@ services:
     env_file: .env
     environment:
       - MEDIA_IPV6=${MEDIA_IPV6:-0}
+      - MEDIA_FORCE_IPV4=${MEDIA_FORCE_IPV4:-1}
     volumes:
       - ${TLS_CERT}:/etc/ssl/cert.pem:ro
       - ${TLS_KEY}:/etc/ssl/key.pem:ro
