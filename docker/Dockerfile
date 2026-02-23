@@ -7,13 +7,22 @@ ARG TARGETARCH
 ENV S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
     S6_VERBOSITY=1 \
     RTPENGINE_MIN_PORT=10000 \
-    RTPENGINE_MAX_PORT=10100
+    RTPENGINE_MAX_PORT=10100 \
+    PRIVATE_IP= \
+    PUBLIC_IP= \
+    DOMAIN=localhost \
+    TURN_TTL=86400 \
+    ACME_LISTEN_PORT=80 \
+    TURN_SECRET= \
+    ALLOWED_SIP_DOMAINS=
 
-# Base runtime deps + tools to add apt repo keys
+# Base runtime deps (+ minimal ops tooling required by plan/healthchecks)
+# - procps: ps/pgrep checks in CI and troubleshooting
+# - iproute2: PRIVATE_IP auto-detection in rtpengine run script
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
       ca-certificates curl python3 xz-utils \
-      gnupg wget procps \
+      gnupg wget procps iproute2 openssl \
   && rm -rf /var/lib/apt/lists/*
 
 # Add RTPengine apt repo (bullseye) maintained by Kamailio community
@@ -36,14 +45,15 @@ RUN set -eux; \
     | tar -C / -Jxpf -
 
 COPY kamailio/kamailio.cfg /etc/kamailio/kamailio.cfg
+COPY kamailio/tls.cfg /etc/kamailio/tls.cfg
 COPY healthcheck/healthcheck_server.py /opt/bitcall/healthcheck_server.py
 COPY rootfs/ /
 
 RUN chmod +x /etc/cont-init.d/* /etc/services.d/*/run
 
-EXPOSE 80/tcp 5060/tcp 5060/udp 2223/udp 10000-10100/udp
+EXPOSE 80/tcp 5060/tcp 5060/udp 10000-10100/udp
 
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
-  CMD curl -fsS http://127.0.0.1/.well-known/acme-challenge/healthcheck || exit 1
+  CMD sh -ec 'curl -fsS "http://127.0.0.1:${ACME_LISTEN_PORT}/.well-known/acme-challenge/healthcheck"'
 
 ENTRYPOINT ["/init"]

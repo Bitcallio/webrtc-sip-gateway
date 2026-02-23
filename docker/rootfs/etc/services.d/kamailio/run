@@ -1,4 +1,26 @@
 #!/command/with-contenv sh
 set -eu
 
+# Wait up to 30s for rtpengine readiness before starting Kamailio.
+tries=0
+rtp_ready=0
+while [ "$tries" -lt 150 ]; do
+  if rtpengine-ctl -ip 127.0.0.1 -port 7722 list numsessions >/dev/null 2>&1 \
+    && ss -lunp 2>/dev/null | grep -qE '127\.0\.0\.1:2223\b'; then
+    rtp_ready=1
+    break
+  fi
+  tries=$((tries + 1))
+  sleep 0.2
+done
+
+if [ "$tries" -ge 150 ]; then
+  echo "kamailio: rtpengine not ready after 30s; exiting for s6 retry." >&2
+  exit 1
+fi
+
+if [ "$rtp_ready" -eq 1 ]; then
+  echo "kamailio: rtpengine ready (cli 7722 + ng 2223)" >&2
+fi
+
 exec /usr/sbin/kamailio -DD -E -f /etc/kamailio/kamailio.cfg -m 64 -M 8

@@ -44,14 +44,46 @@ jobs:
 
       - name: Boot container
         run: |
-          docker run -d --name webrtc-sip-gateway-ci -p 18080:80 webrtc-sip-gateway:ci
+          docker run -d --name webrtc-sip-gateway-ci \
+            -e DOMAIN=gw.example.com \
+            -e TURN_SECRET=test-secret \
+            -e TURN_TTL=3600 \
+            -p 18080:80 \
+            webrtc-sip-gateway:ci
           sleep 12
 
       - name: Verify healthcheck endpoint
         run: curl -fsS http://127.0.0.1:18080/.well-known/acme-challenge/healthcheck
 
+      - name: Verify ACME miss redirects to HTTPS domain
+        run: |
+          curl -sSI http://127.0.0.1:18080/.well-known/acme-challenge/missing \
+            | grep -qi '^Location: https://gw.example.com/.well-known/acme-challenge/missing'
+
+      - name: Verify turn-credentials endpoint on localhost port 8880
+        run: |
+          docker exec webrtc-sip-gateway-ci curl -fsS http://127.0.0.1:8880/turn-credentials \
+            | grep -q '"username"'
+          docker exec webrtc-sip-gateway-ci curl -fsS http://127.0.0.1:8880/turn-credentials \
+            | grep -q '"credential"'
+          docker exec webrtc-sip-gateway-ci curl -fsS http://127.0.0.1:8880/turn-credentials \
+            | grep -q '"uris"'
+
+      - name: Verify turn-credentials is 404 when TURN_SECRET is unset
+        run: |
+          docker run -d --name webrtc-sip-gateway-ci-no-turn \
+            -e DOMAIN=gw.example.com \
+            -p 18081:80 \
+            webrtc-sip-gateway:ci
+          sleep 10
+          docker exec webrtc-sip-gateway-ci-no-turn sh -ec '\
+            code="$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8880/turn-credentials)"; \
+            [ "$code" = "404" ]'
+          docker rm -f webrtc-sip-gateway-ci-no-turn
+
       - name: Verify core processes
         run: |
+          docker exec webrtc-sip-gateway-ci sh -ec '[ "$(cat /proc/1/comm)" = "init" ]'
           docker exec webrtc-sip-gateway-ci pgrep -f kamailio
           docker exec webrtc-sip-gateway-ci pgrep -f rtpengine
           docker exec webrtc-sip-gateway-ci pgrep -f healthcheck_server.py
@@ -62,4 +94,6 @@ jobs:
 
       - name: Cleanup
         if: always()
-        run: docker rm -f webrtc-sip-gateway-ci || true
+        run: |
+          docker rm -f webrtc-sip-gateway-ci || true
+          docker rm -f webrtc-sip-gateway-ci-no-turn || true

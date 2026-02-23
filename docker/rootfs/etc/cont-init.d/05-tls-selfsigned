@@ -1,0 +1,28 @@
+#!/command/with-contenv sh
+set -eu
+
+CERT="/etc/ssl/cert.pem"
+KEY="/etc/ssl/key.pem"
+
+# If user mounted real certs, do nothing.
+if [ -s "$CERT" ] && [ -s "$KEY" ]; then
+  exit 0
+fi
+
+echo "TLS: no cert/key mounted - generating self-signed for smoke/dev..."
+
+mkdir -p /etc/ssl
+
+# Generate a short-lived self-signed certificate for smoke/dev runs.
+CN="${DOMAIN:-localhost}"
+openssl req -x509 -newkey rsa:2048 \
+  -keyout "$KEY" \
+  -out "$CERT" \
+  -days 1 \
+  -nodes \
+  -subj "/CN=${CN}" >/dev/null 2>&1
+
+chmod 600 "$KEY"
+chmod 644 "$CERT"
+
+echo "TLS: self-signed generated: $CERT / $KEY"
