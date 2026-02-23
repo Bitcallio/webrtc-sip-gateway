@@ -17,7 +17,7 @@ Production-grade monorepo for a baseline WebRTC-to-SIP gateway stack.
 ### 1. Build and tag the image
 
 ```bash
-docker build -t ghcr.io/bitcall/webrtc-sip-gateway:0.1.0 ./docker
+docker build -t ghcr.io/bitcallio/webrtc-sip-gateway:0.1.0 ./docker
 ```
 
 ### 2. Install the CLI globally
