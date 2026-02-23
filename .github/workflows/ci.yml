@@ -97,7 +97,17 @@ jobs:
 
       - name: Verify core processes
         run: |
-          docker exec webrtc-sip-gateway-ci sh -ec '[ "$(cat /proc/1/comm)" = "init" ]'
+          docker exec webrtc-sip-gateway-ci sh -ec '
+          comm="$(cat /proc/1/comm || true)";
+          case "$comm" in
+            init|s6-svscan|s6-linux-init|s6-linux-init-shim) exit 0 ;;
+            *)
+              echo "Unexpected PID1 comm: $comm" >&2
+              ps -o pid,comm,args -p 1 >&2 || true
+              exit 1
+              ;;
+          esac
+          '
           docker exec webrtc-sip-gateway-ci pgrep -f kamailio
           docker exec webrtc-sip-gateway-ci pgrep -f rtpengine
           docker exec webrtc-sip-gateway-ci pgrep -f healthcheck_server.py
