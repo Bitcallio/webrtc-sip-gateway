@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+set -eu
+
+exec /usr/sbin/kamailio -DD -E -f /etc/kamailio/kamailio.cfg -m 64 -M 8

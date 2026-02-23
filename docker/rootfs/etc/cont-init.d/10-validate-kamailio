@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+set -eu
+
+/usr/sbin/kamailio -c -f /etc/kamailio/kamailio.cfg

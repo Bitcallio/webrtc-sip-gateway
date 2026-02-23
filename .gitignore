@@ -1,0 +1,4 @@
+plan.md
+node_modules/
+cli/node_modules/
+*.log

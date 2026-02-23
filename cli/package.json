@@ -1,0 +1,24 @@
+{
+  "name": "@bitcall/webrtc-sip-gateway",
+  "version": "0.1.0",
+  "description": "CLI for bootstrapping and managing the Bitcall WebRTC-SIP Gateway stack",
+  "license": "MIT",
+  "bin": {
+    "bitcall-gateway": "bin/bitcall-gateway"
+  },
+  "files": [
+    "bin",
+    "src",
+    "templates"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test": "node --test",
+    "lint": "node --check src/index.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  }
+}

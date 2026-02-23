@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Package dry run
+        run: npm pack --dry-run
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build --pull -t webrtc-sip-gateway:ci ./docker
+
+      - name: Boot container
+        run: |
+          docker run -d --name webrtc-sip-gateway-ci -p 18080:80 webrtc-sip-gateway:ci
+          sleep 12
+
+      - name: Verify healthcheck endpoint
+        run: curl -fsS http://127.0.0.1:18080/.well-known/acme-challenge/healthcheck
+
+      - name: Verify core processes
+        run: |
+          docker exec webrtc-sip-gateway-ci pgrep -f kamailio
+          docker exec webrtc-sip-gateway-ci pgrep -f rtpengine
+          docker exec webrtc-sip-gateway-ci pgrep -f healthcheck_server.py
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker logs webrtc-sip-gateway-ci
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f webrtc-sip-gateway-ci || true

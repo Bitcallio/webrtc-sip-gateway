@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+set -eu
+
+exec python3 /opt/bitcall/healthcheck_server.py
