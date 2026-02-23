@@ -42,15 +42,29 @@ jobs:
       - name: Build image
         run: docker build --pull -t webrtc-sip-gateway:ci ./docker
 
+      - name: Verify Kamailio config syntax
+        run: docker run --rm --entrypoint /usr/sbin/kamailio webrtc-sip-gateway:ci -c -f /etc/kamailio/kamailio.cfg
+
       - name: Boot container
         run: |
           docker run -d --name webrtc-sip-gateway-ci \
             -e DOMAIN=gw.example.com \
             -e TURN_SECRET=test-secret \
             -e TURN_TTL=3600 \
+            -e ALLOWED_SIP_DOMAINS= \
             -p 18080:80 \
             webrtc-sip-gateway:ci
           sleep 12
+
+      - name: Verify dev mode boot (ALLOWED_SIP_DOMAINS empty)
+        run: |
+          status=""
+          for _ in $(seq 1 30); do
+            status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' webrtc-sip-gateway-ci)"
+            [ "$status" = "healthy" ] && break
+            sleep 1
+          done
+          [ "$status" = "healthy" ]
 
       - name: Verify healthcheck endpoint
         run: curl -fsS http://127.0.0.1:18080/.well-known/acme-challenge/healthcheck
