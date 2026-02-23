@@ -1,22 +1,25 @@
 {
-  "name": "@bitcall/webrtc-sip-gateway",
-  "version": "0.1.0",
-  "description": "CLI for bootstrapping and managing the Bitcall WebRTC-SIP Gateway stack",
+  "name": "@bitcall/webphone-gateway",
+  "version": "1.0.0",
+  "description": "Linux CLI for bootstrapping and managing the Bitcall WebRTC-to-SIP Gateway",
   "license": "MIT",
   "bin": {
-    "bitcall-gateway": "bin/bitcall-gateway"
+    "bitcall-gateway": "bin/bitcall-gateway.js"
   },
   "files": [
     "bin",
     "src",
-    "templates"
+    "lib",
+    "templates",
+    "README.md"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=18.0.0"
   },
   "scripts": {
-    "test": "node --test",
-    "lint": "node --check src/index.js"
+    "lint": "node --check src/index.js && node --check bin/bitcall-gateway.js && for f in lib/*.js; do node --check \"$f\"; done",
+    "test": "node test/smoke.test.js",
+    "pack:dry": "npm pack --dry-run"
   },
   "dependencies": {
     "commander": "^12.1.0"

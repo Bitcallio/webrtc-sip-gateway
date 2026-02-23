@@ -1,55 +1,72 @@
 # webrtc-sip-gateway
 
-Production-grade monorepo for a baseline WebRTC-to-SIP gateway stack.
+Bitcall WebRTC-to-SIP gateway repository.
 
-## What is included
+## Components
 
-- `docker/`: container image build context for gateway image `v0.1`
-  - Kamailio 5.7
-  - rtpengine in userspace mode
-  - Python HTTP responder on port `80` for ACME healthcheck path
-  - `s6-overlay` process supervision for all services
-- `cli/`: npm package `@bitcall/webrtc-sip-gateway` with global binary `bitcall-gateway`
-- `.github/workflows/`: CI for CLI checks and Docker build/smoke validation
+- `docker/`: Gateway image (Kamailio + rtpengine + healthcheck responder)
+- `cli/`: Linux npm CLI `@bitcall/webphone-gateway`
+- `.github/workflows/`: CI
 
-## Quickstart
-
-### 1. Build and tag the image
+## End-user install (VPS)
 
 ```bash
-docker build -t ghcr.io/bitcallio/webrtc-sip-gateway:0.1.0 ./docker
-```
-
-### 2. Install the CLI globally
-
-```bash
-sudo npm install -g ./cli
-```
-
-### 3. Initialize and start the stack
-
-```bash
+sudo apt-get update && sudo apt-get install -y curl ca-certificates
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm i -g @bitcall/webphone-gateway
 sudo bitcall-gateway init
 ```
 
-This creates `/opt/bitcall-gateway/.env` and `/opt/bitcall-gateway/docker-compose.yml`, then starts the container with Docker Compose.
-
-### 4. Manage runtime
+After setup, manage with:
 
 ```bash
 sudo bitcall-gateway status
-sudo bitcall-gateway logs
-sudo bitcall-gateway down
+sudo bitcall-gateway logs -f
+sudo bitcall-gateway restart
 ```
 
-### 5. Verify healthcheck
+## Developer quickstart
 
 ```bash
-curl -fsS http://127.0.0.1/.well-known/acme-challenge/healthcheck
+npm --prefix cli install
+npm --prefix cli run lint
+npm --prefix cli test
+docker build -t webrtc-sip-gateway:test ./docker
 ```
 
-Expected response:
+## Manual VPS verification (post-init)
 
-```text
-ok
+1. Systemd and container state
+
+```bash
+sudo systemctl status bitcall-gateway --no-pager
+sudo docker ps --filter name=bitcall-gateway
+```
+
+2. TURN credentials endpoint (if TURN enabled)
+
+```bash
+curl -k --resolve "$(grep '^DOMAIN=' /opt/bitcall-gateway/.env | cut -d= -f2):443:127.0.0.1" \
+  "https://$(grep '^DOMAIN=' /opt/bitcall-gateway/.env | cut -d= -f2)/turn-credentials"
+```
+
+3. WebSocket handshake should return `101 Switching Protocols`
+
+```bash
+DOMAIN="$(grep '^DOMAIN=' /opt/bitcall-gateway/.env | cut -d= -f2)"
+curl -k -i -N \
+  -H "Connection: Upgrade" \
+  -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  -H "Sec-WebSocket-Protocol: sip" \
+  "https://${DOMAIN}/" | head -n 30
+```
+
+4. SIP listeners and service
+
+```bash
+sudo ss -ltnup | grep -E ':(443|5060|5061)\b'
+sudo systemctl is-enabled bitcall-gateway
 ```
