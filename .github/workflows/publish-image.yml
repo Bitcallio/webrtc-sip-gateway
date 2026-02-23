@@ -43,13 +43,36 @@ jobs:
           fi
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
 
+      - name: Docker image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/bitcallio/webrtc-sip-gateway
+            docker.io/${{ steps.dh.outputs.repo }}
+          tags: |
+            type=raw,value=${{ steps.v.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=webrtc-sip-gateway
+            org.opencontainers.image.description=WebRTC-to-SIP gateway (Kamailio + rtpengine) with ACME and TURN credential endpoints
+            org.opencontainers.image.source=https://github.com/Bitcallio/webrtc-sip-gateway
+            org.opencontainers.image.url=https://github.com/Bitcallio/webrtc-sip-gateway
+            org.opencontainers.image.licenses=MIT
+
       - name: Build & push
         uses: docker/build-push-action@v6
         with:
           context: ./docker
           push: true
-          tags: |
-            ghcr.io/bitcallio/webrtc-sip-gateway:${{ steps.v.outputs.version }}
-            ghcr.io/bitcallio/webrtc-sip-gateway:latest
-            docker.io/${{ steps.dh.outputs.repo }}:${{ steps.v.outputs.version }}
-            docker.io/${{ steps.dh.outputs.repo }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ steps.dh.outputs.repo }}
+          short-description: WebRTC-to-SIP gateway (Kamailio + rtpengine)
+          readme-filepath: ./README.md
