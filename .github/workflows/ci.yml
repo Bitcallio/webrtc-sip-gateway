@@ -42,6 +42,9 @@ jobs:
       - name: Build image
         run: docker build --pull -t webrtc-sip-gateway:ci ./docker
 
+      - name: Verify MEDIA_IPV6 default env is 0 in image
+        run: docker run --rm --entrypoint /bin/sh webrtc-sip-gateway:ci -lc '[ "${MEDIA_IPV6:-}" = "0" ]'
+
       - name: Verify Kamailio config syntax
         run: docker run --rm --entrypoint /usr/sbin/kamailio webrtc-sip-gateway:ci -c -f /etc/kamailio/kamailio.cfg
 
@@ -68,6 +71,7 @@ jobs:
             --tmpfs /tmp:rw,nosuid,nodev \
             --tmpfs /run:rw,exec,nosuid,nodev \
             -e DOMAIN=gw.example.com \
+            -e MEDIA_IPV6=0 \
             -e TURN_SECRET=test-secret \
             -e TURN_TTL=3600 \
             -e ALLOWED_SIP_DOMAINS= \
@@ -83,6 +87,11 @@ jobs:
       - name: Verify runtime smoke process + listeners
         run: |
           if ! docker exec gwsmoke sh -lc 'comm="$(cat /proc/1/comm)"; [ "$comm" = "init" ] || [ "$comm" = "s6-svscan" ]'; then
+            docker logs gwsmoke || true
+            exit 1
+          fi
+
+          if ! docker exec gwsmoke sh -lc 'cmd="$(ps -eo args | grep -m1 "[r]tpengine --foreground")"; echo "$cmd"; echo "$cmd" | grep -Eq -- "--interface=[0-9.]+![0-9.]+"; ! echo "$cmd" | grep -Eq -- "--interface=[^ ]*:"'; then
             docker logs gwsmoke || true
             exit 1
           fi

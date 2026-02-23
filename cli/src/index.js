@@ -34,7 +34,7 @@ const {
 } = require("../lib/system");
 const { readTemplate, renderTemplate } = require("../lib/template");
 
-const PACKAGE_VERSION = "0.2.3";
+const PACKAGE_VERSION = "0.2.4";
 
 function detectComposeCommand() {
   if (run("docker", ["compose", "version"], { check: false }).status === 0) {
@@ -103,6 +103,7 @@ function envOrder() {
     "WSS_LISTEN_PORT",
     "INTERNAL_WSS_PORT",
     "INTERNAL_WS_PORT",
+    "MEDIA_IPV6",
     "RTPENGINE_MIN_PORT",
     "RTPENGINE_MAX_PORT",
     "WITH_REVERSE_PROXY",
@@ -468,6 +469,11 @@ async function runWizard(existing = {}, preflight = {}) {
       existing.WEBPHONE_ORIGIN || DEFAULT_WEBPHONE_ORIGIN
     );
 
+    const mediaIpv6Enabled = await prompt.askYesNo(
+      "Enable IPv6 media candidates? (default: No)",
+      existing.MEDIA_IPV6 === "1"
+    );
+
     const configureUfw = await prompt.askYesNo("Configure ufw firewall rules now", true);
 
     const config = {
@@ -492,6 +498,7 @@ async function runWizard(existing = {}, preflight = {}) {
       turnExternalUsername,
       turnExternalCredential,
       webphoneOrigin,
+      mediaIpv6: mediaIpv6Enabled ? "1" : "0",
       rtpMin: "10000",
       rtpMax: "20000",
       acmeListenPort: deployMode === "reverse-proxy" ? "8080" : "80",
@@ -509,6 +516,7 @@ async function runWizard(existing = {}, preflight = {}) {
     console.log(`  SIP provider URI: ${config.sipProviderUri}`);
     console.log(`  Allowed SIP domains: ${config.allowedDomains || "(empty/dev-mode)"}`);
     console.log(`  TURN mode: ${config.turnMode}`);
+    console.log(`  IPv6 media candidates: ${config.mediaIpv6 === "1" ? "enabled" : "disabled (IPv4-only)"}`);
 
     const proceed = await prompt.askYesNo("Proceed with provisioning", true);
     if (!proceed) {
@@ -557,6 +565,7 @@ function renderEnvContent(config, tlsCert, tlsKey) {
     WSS_LISTEN_PORT: config.wssListenPort,
     INTERNAL_WSS_PORT: config.internalWssPort,
     INTERNAL_WS_PORT: config.internalWsPort,
+    MEDIA_IPV6: config.mediaIpv6,
   });
 
   let extra = "";
@@ -772,6 +781,7 @@ function statusCommand() {
   console.log(`Port ${envMap.WSS_LISTEN_PORT || "443"}: ${formatMark(p443.inUse)} listening`);
   console.log(`Port 5060: ${formatMark(p5060.inUse)} listening`);
   console.log(`rtpengine control: ${formatMark(rtpReady)} reachable`);
+  console.log(`IPv6 media candidates: ${(envMap.MEDIA_IPV6 || "0") === "1" ? "enabled" : "disabled (IPv4-only)"}`);
   if (envMap.TURN_MODE && envMap.TURN_MODE !== "none") {
     console.log(`/turn-credentials: ${formatMark(turnReady)} reachable`);
   }
@@ -789,6 +799,7 @@ function statusCommand() {
   console.log(`DEPLOY_MODE=${envMap.DEPLOY_MODE || ""}`);
   console.log(`ALLOWED_SIP_DOMAINS=${envMap.ALLOWED_SIP_DOMAINS || ""}`);
   console.log(`TURN_MODE=${envMap.TURN_MODE || "none"}`);
+  console.log(`MEDIA_IPV6=${envMap.MEDIA_IPV6 || "0"}`);
 }
 
 function certStatusCommand() {

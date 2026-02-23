@@ -8,6 +8,7 @@ fi
 
 PRIVATE_IP="${PRIVATE_IP:-}"
 PUBLIC_IP="${PUBLIC_IP:-}"
+MEDIA_IPV6="${MEDIA_IPV6:-0}"
 
 if [ -z "$PRIVATE_IP" ]; then
   PRIVATE_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}')"
@@ -21,6 +22,12 @@ fi
 if [ -z "$PUBLIC_IP" ]; then
   PUBLIC_IP="$PRIVATE_IP"
   echo "rtpengine: PUBLIC_IP not set, using ${PUBLIC_IP}" >&2
+fi
+
+if [ "$MEDIA_IPV6" = "1" ]; then
+  echo "rtpengine: MEDIA_IPV6=1 (IPv6 media candidates enabled by policy)" >&2
+else
+  echo "rtpengine: MEDIA_IPV6=0 (IPv4-only media candidates policy)" >&2
 fi
 
 # 2223 is the NG UDP control socket used by Kamailio's rtpengine module.

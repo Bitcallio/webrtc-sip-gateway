@@ -14,9 +14,13 @@ Bitcall WebRTC-to-SIP gateway repository.
 sudo apt-get update && sudo apt-get install -y curl ca-certificates
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.3
+sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.4
 sudo bitcall-gateway init
 ```
+
+By default, gateway media candidates are IPv4-only (`MEDIA_IPV6=0`) to avoid
+IPv6 ICE path failures on mixed/consumer networks. Set `MEDIA_IPV6=1` in
+`/opt/bitcall-gateway/.env` to enable IPv6 candidates if your network supports them.
 
 After setup, manage with:
 
