@@ -18,6 +18,7 @@ function expectExists(target) {
   const libDir = path.resolve(__dirname, "../lib");
   expectExists(path.join(libDir, "constants.js"));
   expectExists(path.join(libDir, "shell.js"));
+  expectExists(path.join(libDir, "firewall.js"));
   expectExists(path.join(libDir, "envfile.js"));
   expectExists(path.join(libDir, "prompt.js"));
   expectExists(path.join(libDir, "system.js"));
