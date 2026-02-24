@@ -6,20 +6,16 @@ const assert = require("assert").strict;
 const {
   normalizeInitProfile,
   validateProductionConfig,
-  buildDevWarnings,
+  buildSecurityNotes,
   buildQuickFlowDefaults,
   shouldRequireAllowlist,
 } = require("../src/index");
 
 (function testNormalizeInitProfile() {
-  assert.equal(normalizeInitProfile({}, {}), "dev");
+  assert.equal(normalizeInitProfile({}, {}), "production");
   assert.equal(normalizeInitProfile({ dev: true }, {}), "dev");
   assert.equal(normalizeInitProfile({ production: true }, {}), "production");
-  assert.equal(
-    normalizeInitProfile({}, { BITCALL_ENV: "production" }),
-    "dev",
-    "default init must not inherit production profile"
-  );
+  assert.equal(normalizeInitProfile({}, { BITCALL_ENV: "production" }), "production");
 })();
 
 (function testQuickFlowDefaultsDev() {
@@ -52,51 +48,36 @@ const {
   assert.equal(defaults.sipTrustedIps, "198.51.100.10");
 })();
 
-(function testDevWarnings() {
-  const warnings = buildDevWarnings({
+(function testSecurityNotes() {
+  const notes = buildSecurityNotes({
     allowedDomains: "",
     webphoneOrigin: "*",
     sipTrustedIps: "",
   });
-  assert.equal(warnings.length, 3);
-})();
-
-(function testProductionValidationFailsWithoutAllowlistOrProvider() {
-  assert.throws(
-    () =>
-      validateProductionConfig({
-        routingMode: "universal",
-        sipProviderUri: "",
-        allowedDomains: "",
-        webphoneOrigin: "https://app.example.com",
-        turnApiToken: "",
-      }),
-    /ALLOWED_SIP_DOMAINS or single-provider routing/
-  );
+  assert.equal(notes.length, 3);
 })();
 
 (function testAllowlistRequirementRules() {
-  // Production + universal must require allowlist at prompt time (reprompt via askText required=true).
-  assert.equal(shouldRequireAllowlist("production", "universal"), true);
+  assert.equal(shouldRequireAllowlist("production", "universal"), false);
   assert.equal(shouldRequireAllowlist("production", "single-provider"), false);
   assert.equal(shouldRequireAllowlist("dev", "universal"), false);
 })();
 
-(function testProductionValidationFailsWithoutOriginOrToken() {
+(function testProductionValidationFailsSingleProviderWithoutUri() {
   assert.throws(
     () =>
       validateProductionConfig({
-        routingMode: "universal",
+        routingMode: "single-provider",
         sipProviderUri: "",
-        allowedDomains: "sip.example.com",
+        allowedDomains: "",
         webphoneOrigin: "*",
         turnApiToken: "",
       }),
-    /WEBPHONE_ORIGIN_PATTERN or TURN_API_TOKEN/
+    /Single-provider mode requires SIP_PROVIDER_URI/
   );
 })();
 
-(function testProductionValidationAllowsSingleProviderAndToken() {
+(function testProductionValidationAllowsSingleProviderWithUri() {
   assert.doesNotThrow(() =>
     validateProductionConfig({
       routingMode: "single-provider",
@@ -104,6 +85,18 @@ const {
       allowedDomains: "",
       webphoneOrigin: "*",
       turnApiToken: "token",
+    })
+  );
+})();
+
+(function testProductionValidationAllowsUniversalWildcard() {
+  assert.doesNotThrow(() =>
+    validateProductionConfig({
+      routingMode: "universal",
+      sipProviderUri: "",
+      allowedDomains: "",
+      webphoneOrigin: "*",
+      turnApiToken: "",
     })
   );
 })();

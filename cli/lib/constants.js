@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("path");
+const PKG_VERSION = require("../package.json").version;
 
 const GATEWAY_DIR = "/opt/bitcall-gateway";
 const SERVICE_NAME = "bitcall-gateway";
@@ -14,7 +15,7 @@ module.exports = {
   SSL_DIR: path.join(GATEWAY_DIR, "ssl"),
   ENV_PATH: path.join(GATEWAY_DIR, ".env"),
   COMPOSE_PATH: path.join(GATEWAY_DIR, "docker-compose.yml"),
-  DEFAULT_GATEWAY_IMAGE: "ghcr.io/bitcallio/webrtc-sip-gateway:0.2.8",
+  DEFAULT_GATEWAY_IMAGE: `ghcr.io/bitcallio/webrtc-sip-gateway:${PKG_VERSION}`,
   DEFAULT_PROVIDER_HOST: "sip.example.com",
   DEFAULT_WEBPHONE_ORIGIN: "*",
   RENEW_HOOK_PATH: "/etc/letsencrypt/renewal-hooks/deploy/bitcall-gateway.sh",

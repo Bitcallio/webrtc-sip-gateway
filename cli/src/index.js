@@ -40,7 +40,7 @@ const {
   isMediaIpv4OnlyRulesPresent,
 } = require("../lib/firewall");
 
-const PACKAGE_VERSION = "0.2.8";
+const PACKAGE_VERSION = require("../package.json").version;
 const INSTALL_LOG_PATH = "/var/log/bitcall-gateway-install.log";
 
 function printBanner() {
@@ -327,36 +327,35 @@ function isOriginWildcard(originPattern) {
 }
 
 function validateProductionConfig(config) {
-  const hasAllowedDomains = countAllowedDomains(config.allowedDomains) > 0;
-  const hasSingleProvider = isSingleProviderConfigured(config);
-  if (!hasAllowedDomains && !hasSingleProvider) {
-    throw new Error(
-      "Production requires ALLOWED_SIP_DOMAINS or single-provider routing with SIP_PROVIDER_URI. Re-run: bitcall-gateway init --advanced --production"
-    );
+  // In production, validate that the config is internally consistent.
+  // Universal mode (open domains, open origin) is a valid production config.
+
+  // Single-provider mode requires a valid SIP_PROVIDER_URI
+  if (config.routingMode === "single-provider") {
+    if (!(config.sipProviderUri || "").trim()) {
+      throw new Error(
+        "Single-provider mode requires SIP_PROVIDER_URI. " +
+          "Re-run: bitcall-gateway init --advanced --production"
+      );
+    }
   }
 
-  const originPattern = toOriginPattern(config.webphoneOrigin);
-  const hasStrictOrigin = !isOriginWildcard(originPattern);
-  const hasTurnToken = Boolean((config.turnApiToken || "").trim());
-  if (!hasStrictOrigin && !hasTurnToken) {
-    throw new Error(
-      "Production requires a strict WEBPHONE_ORIGIN_PATTERN or TURN_API_TOKEN. Re-run: bitcall-gateway init --advanced --production"
-    );
-  }
+  // If custom cert mode, paths are required (already validated elsewhere)
+  // No other hard requirements for production.
 }
 
-function buildDevWarnings(config) {
-  const warnings = [];
+function buildSecurityNotes(config) {
+  const notes = [];
   if (countAllowedDomains(config.allowedDomains) === 0) {
-    warnings.push("Provider allowlist: any (DEV mode)");
+    notes.push("SIP domains: unrestricted (universal mode)");
   }
   if (isOriginWildcard(toOriginPattern(config.webphoneOrigin))) {
-    warnings.push("Webphone origin: any (DEV mode)");
+    notes.push("Webphone origin: unrestricted");
   }
   if (!(config.sipTrustedIps || "").trim()) {
-    warnings.push("Trusted SIP source IPs: any (DEV mode)");
+    notes.push("SIP source IPs: unrestricted");
   }
-  return warnings;
+  return notes;
 }
 
 function buildQuickFlowDefaults(initProfile, existing = {}) {
@@ -371,12 +370,15 @@ function buildQuickFlowDefaults(initProfile, existing = {}) {
     sipTrustedIps: existing.SIP_TRUSTED_IPS || "",
   };
 
+  // Dev mode: explicitly open everything (ignore existing restrictions)
   if (initProfile === "dev") {
     defaults.allowedDomains = "";
     defaults.webphoneOrigin = "*";
     defaults.sipTrustedIps = "";
   }
 
+  // Production mode: use existing values or defaults (already universal)
+  // Do not force restrictions here.
   return defaults;
 }
 
@@ -545,7 +547,6 @@ function toOriginPattern(origin) {
 }
 
 function normalizeInitProfile(initOptions = {}, existing = {}) {
-  void existing;
   if (initOptions.dev && initOptions.production) {
     throw new Error("Use only one mode: --dev or --production.");
   }
@@ -555,7 +556,7 @@ function normalizeInitProfile(initOptions = {}, existing = {}) {
   if (initOptions.dev) {
     return "dev";
   }
-  return "dev";
+  return existing.BITCALL_ENV || "production";
 }
 
 async function runPreflight(ctx) {
@@ -601,27 +602,20 @@ async function runPreflight(ctx) {
   };
 }
 
-function printSummary(config, devWarnings) {
+function printSummary(config, securityNotes) {
   const allowedCount = countAllowedDomains(config.allowedDomains);
-  const showDevWarnings = config.bitcallEnv === "dev";
   const providerAllowlistSummary =
     allowedCount > 0
       ? config.allowedDomains
-      : config.bitcallEnv === "production"
-        ? isSingleProviderConfigured(config)
-          ? "(single-provider mode)"
-          : "(missing)"
+      : isSingleProviderConfigured(config)
+        ? "(single-provider mode)"
         : "(any)";
   console.log("\nSummary:");
   console.log(`  Domain: ${config.domain}`);
   console.log(`  Environment: ${config.bitcallEnv}`);
   console.log(`  Routing: ${config.routingMode}`);
-  console.log(
-    `  Provider allowlist: ${providerAllowlistSummary}${showDevWarnings && allowedCount === 0 ? " [DEV WARNING]" : ""}`
-  );
-  console.log(
-    `  Webphone origin: ${config.webphoneOrigin === "*" ? `(any)${showDevWarnings ? " [DEV WARNING]" : ""}` : config.webphoneOrigin}`
-  );
+  console.log(`  Provider allowlist: ${providerAllowlistSummary}`);
+  console.log(`  Webphone origin: ${config.webphoneOrigin === "*" ? "(any)" : config.webphoneOrigin}`);
   console.log(`  SIP source IPs: ${(config.sipTrustedIps || "").trim() ? config.sipTrustedIps : "(any)"}`);
   console.log(`  TLS: ${config.tlsMode === "letsencrypt" ? "Let's Encrypt" : config.tlsMode}`);
   console.log(`  TURN: ${config.turnMode === "coturn" ? "enabled (coturn)" : config.turnMode}`);
@@ -630,16 +624,18 @@ function printSummary(config, devWarnings) {
   );
   console.log(`  Firewall: ${config.configureUfw ? "UFW enabled" : "manual setup"}`);
 
-  if (devWarnings.length > 0) {
-    console.log("\nWarnings:");
-    for (const warning of devWarnings) {
-      console.log(`  - ${warning}`);
+  if (securityNotes.length > 0) {
+    console.log("\nInfo:");
+    for (const note of securityNotes) {
+      console.log(`  ℹ ${note}`);
     }
   }
 }
 
 function shouldRequireAllowlist(bitcallEnv, routingMode) {
-  return bitcallEnv === "production" && routingMode === "universal";
+  void bitcallEnv;
+  void routingMode;
+  return false;
 }
 
 function parseProviderFromUri(uri = "") {
@@ -662,12 +658,7 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
 
   try {
     const initProfile = normalizeInitProfile(initOptions, existing);
-    let advanced = Boolean(initOptions.advanced);
-    if (initOptions.production && !initOptions.advanced) {
-      advanced = true;
-    } else if (!initOptions.dev && !initOptions.production && !initOptions.advanced) {
-      advanced = await prompt.askYesNo("Advanced setup", false);
-    }
+    const advanced = Boolean(initOptions.advanced);
 
     const detectedIp = detectPublicIp();
     const domainDefault = initOptions.domain || existing.DOMAIN || "";
@@ -680,45 +671,55 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
     }
 
     const resolved = resolveDomainIpv4(domain);
-    if (resolved.length > 0 && !resolved.includes(publicIp)) {
+    if (initProfile !== "dev" && resolved.length > 0 && !resolved.includes(publicIp)) {
       console.log(`Warning: DNS for ${domain} resolves to ${resolved.join(", ")}, not ${publicIp}.`);
     }
 
-    const autoDeployMode =
+    const detectedDeployMode =
       (preflight.p80 && preflight.p80.inUse) || (preflight.p443 && preflight.p443.inUse)
         ? "reverse-proxy"
         : "standalone";
 
-    let deployMode = autoDeployMode;
+    const existingDeployMode =
+      existing.DEPLOY_MODE === "standalone" || existing.DEPLOY_MODE === "reverse-proxy"
+        ? existing.DEPLOY_MODE
+        : "";
+    let deployMode = existingDeployMode || detectedDeployMode;
     let tlsMode = "letsencrypt";
     let acmeEmail = initOptions.email || existing.ACME_EMAIL || "";
     let customCertPath = "";
     let customKeyPath = "";
-    let bitcallEnv = initProfile;
-    let routingMode = existing.ROUTING_MODE || "universal";
+    const quickDefaults = buildQuickFlowDefaults(initProfile, existing);
+    let bitcallEnv = quickDefaults.bitcallEnv;
+    let routingMode = "universal";
     const providerFromEnv = parseProviderFromUri(existing.SIP_PROVIDER_URI || "");
     let sipProviderHost = providerFromEnv.host || DEFAULT_PROVIDER_HOST;
-    let sipTransport = providerFromEnv.transport || "udp";
-    let sipPort = providerFromEnv.port || "5060";
+    let sipTransport = "udp";
+    let sipPort = "5060";
     let sipProviderUri = "";
-    let allowedDomains = existing.ALLOWED_SIP_DOMAINS || "";
-    let sipTrustedIps = existing.SIP_TRUSTED_IPS || "";
+    let allowedDomains = "";
+    let sipTrustedIps = "";
     let turnMode = "coturn";
     let turnSecret = "";
     let turnTtl = existing.TURN_TTL || "86400";
-    let turnApiToken = existing.TURN_API_TOKEN || "";
+    let turnApiToken = "";
     let turnExternalUrls = "";
     let turnExternalUsername = "";
     let turnExternalCredential = "";
-    let webphoneOrigin = existing.WEBPHONE_ORIGIN || DEFAULT_WEBPHONE_ORIGIN;
-    let configureUfw = await prompt.askYesNo("Configure UFW firewall rules now?", true);
+    let webphoneOrigin = "*";
+    let configureUfw = true;
     let mediaIpv4Only = existing.MEDIA_IPV4_ONLY ? existing.MEDIA_IPV4_ONLY === "1" : true;
+    let rtpMin = existing.RTPENGINE_MIN_PORT || "10000";
+    let rtpMax = existing.RTPENGINE_MAX_PORT || "20000";
+    let turnUdpPort = existing.TURN_UDP_PORT || "3478";
+    let turnsTcpPort = existing.TURNS_TCP_PORT || "5349";
+    let turnRelayMinPort = existing.TURN_RELAY_MIN_PORT || "49152";
+    let turnRelayMaxPort = existing.TURN_RELAY_MAX_PORT || "49252";
 
-    if (!advanced) {
-      acmeEmail = acmeEmail || (await prompt.askText("Let's Encrypt email", "", { required: true }));
-      turnMode = await prompt.askYesNo("Enable built-in TURN (coturn)?", true) ? "coturn" : "none";
-      const quickDefaults = buildQuickFlowDefaults(initProfile, existing);
-      bitcallEnv = quickDefaults.bitcallEnv;
+    if (initProfile === "dev") {
+      tlsMode = "dev-self-signed";
+      acmeEmail = "";
+      turnMode = "coturn";
       routingMode = quickDefaults.routingMode;
       sipProviderUri = quickDefaults.sipProviderUri;
       sipTransport = quickDefaults.sipTransport;
@@ -726,17 +727,13 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
       allowedDomains = quickDefaults.allowedDomains;
       webphoneOrigin = quickDefaults.webphoneOrigin;
       sipTrustedIps = quickDefaults.sipTrustedIps;
+      configureUfw = true;
+      mediaIpv4Only = true;
     } else {
-      deployMode = await prompt.askChoice(
-        "Deployment mode",
-        ["standalone", "reverse-proxy"],
-        autoDeployMode === "reverse-proxy" ? 1 : 0
-      );
-
       tlsMode = await prompt.askChoice(
         "TLS certificate mode",
-        ["letsencrypt", "custom", "dev-self-signed"],
-        0
+        ["letsencrypt", "custom"],
+        existing.TLS_MODE === "custom" ? 1 : 0
       );
 
       if (tlsMode === "custom") {
@@ -746,104 +743,79 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
         customKeyPath = await prompt.askText("Path to TLS private key (PEM)", existing.TLS_KEY || "", {
           required: true,
         });
-      }
-
-      if (tlsMode === "letsencrypt") {
-        acmeEmail = await prompt.askText("Let's Encrypt email", acmeEmail, { required: true });
-      } else {
         acmeEmail = "";
+      } else {
+        acmeEmail = await prompt.askText("Let's Encrypt email", acmeEmail, { required: true });
       }
 
-      if (!initOptions.dev && !initOptions.production) {
-        bitcallEnv = await prompt.askChoice("Environment", ["production", "dev"], bitcallEnv === "dev" ? 1 : 0);
-      }
-      routingMode = await prompt.askChoice(
-        "Routing mode",
-        ["universal", "single-provider"],
-        routingMode === "single-provider" ? 1 : 0
-      );
+      turnMode = await prompt.askYesNo("Enable built-in TURN (coturn)?", true) ? "coturn" : "none";
+      routingMode = "universal";
+      sipProviderUri = "";
+      sipTransport = "udp";
+      sipPort = "5060";
+      allowedDomains = "";
+      webphoneOrigin = "*";
+      sipTrustedIps = "";
+      turnApiToken = "";
 
-      if (routingMode === "single-provider") {
-        sipProviderHost = await prompt.askText(
-          "SIP provider host",
-          existing.SIP_PROVIDER_URI
-            ? existing.SIP_PROVIDER_URI.replace(/^sip:/, "").split(":")[0]
-            : DEFAULT_PROVIDER_HOST,
-          { required: true }
+      if (advanced) {
+        const restrictToSingleProvider = await prompt.askYesNo(
+          "Restrict to single SIP provider?",
+          existing.ROUTING_MODE === "single-provider"
         );
 
-        const sipTransportChoice = await prompt.askChoice(
-          "SIP provider transport",
-          ["udp", "tcp", "tls", "custom"],
-          0
-        );
-
-        sipTransport = sipTransportChoice;
-        if (sipTransportChoice === "tcp" || sipTransportChoice === "udp") {
-          sipPort = "5060";
-        } else if (sipTransportChoice === "tls") {
-          sipPort = "5061";
-        } else {
-          sipTransport = await prompt.askChoice("Custom transport", ["udp", "tcp", "tls"], 0);
-          sipPort = await prompt.askText(
-            "Custom SIP port",
-            sipTransport === "tls" ? "5061" : "5060",
+        if (restrictToSingleProvider) {
+          routingMode = "single-provider";
+          sipProviderHost = await prompt.askText(
+            "SIP provider host",
+            providerFromEnv.host || DEFAULT_PROVIDER_HOST,
             { required: true }
           );
+          sipTransport = await prompt.askChoice(
+            "SIP provider transport",
+            ["udp", "tcp", "tls"],
+            providerFromEnv.transport === "tcp" ? 1 : providerFromEnv.transport === "tls" ? 2 : 0
+          );
+          const defaultProviderPort =
+            providerFromEnv.port || (sipTransport === "tls" ? "5061" : "5060");
+          sipPort = await prompt.askText("SIP provider port", defaultProviderPort, { required: true });
+          sipProviderUri = `sip:${sipProviderHost}:${sipPort};transport=${sipTransport}`;
         }
 
-        sipProviderUri = `sip:${sipProviderHost}:${sipPort};transport=${sipTransport}`;
-      }
-
-      const requireAllowlist = shouldRequireAllowlist(bitcallEnv, routingMode);
-      allowedDomains = await prompt.askText(
-        requireAllowlist
-          ? "Allowed SIP domains (comma-separated; required in production universal mode)"
-          : "Allowed SIP domains (comma-separated)",
-        allowedDomains,
-        { required: requireAllowlist }
-      );
-
-      sipTrustedIps = await prompt.askText(
-        "Trusted SIP source IPs (optional, comma-separated)",
-        sipTrustedIps
-      );
-
-      const existingTurn = existing.TURN_MODE || "coturn";
-      const turnDefaultIndex = existingTurn === "external" ? 2 : existingTurn === "coturn" ? 1 : 0;
-      turnMode = await prompt.askChoice("TURN mode", ["none", "coturn", "external"], turnDefaultIndex);
-      if (turnMode === "coturn") {
-        turnSecret = crypto.randomBytes(32).toString("hex");
-        turnTtl = await prompt.askText("TURN credential TTL seconds", turnTtl, { required: true });
-        turnApiToken = await prompt.askText("TURN API token (optional)", turnApiToken);
-      } else if (turnMode === "external") {
-        turnSecret = "";
-        turnApiToken = "";
-        turnExternalUrls = await prompt.askText("External TURN urls", existing.TURN_EXTERNAL_URLS || "", {
-          required: true,
-        });
-        turnExternalUsername = await prompt.askText(
-          "External TURN username",
-          existing.TURN_EXTERNAL_USERNAME || ""
+        allowedDomains = await prompt.askText(
+          "SIP domain allowlist (optional, comma-separated)",
+          existing.ALLOWED_SIP_DOMAINS || ""
         );
-        turnExternalCredential = await prompt.askText(
-          "External TURN credential",
-          existing.TURN_EXTERNAL_CREDENTIAL || ""
+        webphoneOrigin = await prompt.askText(
+          "Webphone origin restriction (optional, * for any)",
+          existing.WEBPHONE_ORIGIN || "*"
         );
-      } else {
-        turnSecret = "";
-        turnApiToken = "";
+        webphoneOrigin = webphoneOrigin.trim() ? webphoneOrigin : "*";
+        sipTrustedIps = await prompt.askText(
+          "SIP trusted source IPs (optional, comma-separated)",
+          existing.SIP_TRUSTED_IPS || ""
+        );
+
+        if (turnMode === "coturn") {
+          turnApiToken = await prompt.askText("TURN API token (optional)", existing.TURN_API_TOKEN || "");
+        }
+
+        const customizePorts = await prompt.askYesNo("Customize RTP/TURN ports?", false);
+        if (customizePorts) {
+          rtpMin = await prompt.askText("RTP minimum port", rtpMin, { required: true });
+          rtpMax = await prompt.askText("RTP maximum port", rtpMax, { required: true });
+          if (turnMode === "coturn") {
+            turnUdpPort = await prompt.askText("TURN UDP/TCP port", turnUdpPort, { required: true });
+            turnsTcpPort = await prompt.askText("TURNS TCP port", turnsTcpPort, { required: true });
+            turnRelayMinPort = await prompt.askText("TURN relay minimum port", turnRelayMinPort, {
+              required: true,
+            });
+            turnRelayMaxPort = await prompt.askText("TURN relay maximum port", turnRelayMaxPort, {
+              required: true,
+            });
+          }
+        }
       }
-
-      webphoneOrigin = await prompt.askText(
-        "Allowed webphone origin (* for any)",
-        webphoneOrigin
-      );
-
-      mediaIpv4Only = await prompt.askYesNo(
-        "Media IPv4-only mode (block IPv6 RTP/TURN on host firewall)",
-        mediaIpv4Only
-      );
     }
 
     if (turnMode === "coturn") {
@@ -881,12 +853,12 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
       turnExternalCredential,
       webphoneOrigin,
       mediaIpv4Only: mediaIpv4Only ? "1" : "0",
-      rtpMin: existing.RTPENGINE_MIN_PORT || "10000",
-      rtpMax: existing.RTPENGINE_MAX_PORT || "20000",
-      turnUdpPort: existing.TURN_UDP_PORT || "3478",
-      turnsTcpPort: existing.TURNS_TCP_PORT || "5349",
-      turnRelayMinPort: existing.TURN_RELAY_MIN_PORT || "49152",
-      turnRelayMaxPort: existing.TURN_RELAY_MAX_PORT || "49252",
+      rtpMin,
+      rtpMax,
+      turnUdpPort,
+      turnsTcpPort,
+      turnRelayMinPort,
+      turnRelayMaxPort,
       acmeListenPort: deployMode === "reverse-proxy" ? "8080" : "80",
       wssListenPort: deployMode === "reverse-proxy" ? "8443" : "443",
       internalWssPort: "8443",
@@ -898,12 +870,14 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
       validateProductionConfig(config);
     }
 
-    const devWarnings = config.bitcallEnv === "dev" ? buildDevWarnings(config) : [];
-    printSummary(config, devWarnings);
+    const securityNotes = buildSecurityNotes(config);
+    printSummary(config, securityNotes);
 
-    const proceed = await prompt.askYesNo("Proceed with provisioning", true);
-    if (!proceed) {
-      throw new Error("Initialization canceled.");
+    if (initProfile !== "dev") {
+      const proceed = await prompt.askYesNo("Proceed with provisioning", true);
+      if (!proceed) {
+        throw new Error("Initialization canceled.");
+      }
     }
 
     return config;
@@ -1100,6 +1074,9 @@ async function initCommand(initOptions = {}) {
       tlsCertPath = path.join(SSL_DIR, "dev-fullchain.pem");
       tlsKeyPath = path.join(SSL_DIR, "dev-privkey.pem");
       generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 30, ctx.exec);
+      console.log("WARNING: Self-signed certificates do not work with browsers.");
+      console.log("WebSocket connections will be rejected. Use --dev for local testing only.");
+      console.log("For browser access, re-run with Let's Encrypt: sudo bitcall-gateway init");
     } else {
       tlsCertPath = path.join(SSL_DIR, "bootstrap-fullchain.pem");
       tlsKeyPath = path.join(SSL_DIR, "bootstrap-privkey.pem");
@@ -1131,6 +1108,92 @@ async function initCommand(initOptions = {}) {
   }
 }
 
+async function reconfigureCommand(options) {
+  ensureInitialized();
+  printBanner();
+  const ctx = createInstallContext(options);
+
+  let preflight;
+  await ctx.step("Checks", async () => {
+    preflight = await runPreflight(ctx);
+  });
+
+  const existingEnv = fs.existsSync(ENV_PATH) ? loadEnvFile(ENV_PATH) : {};
+
+  let config;
+  await ctx.step("Config", async () => {
+    config = await runWizard(existingEnv, preflight, options);
+  });
+
+  ensureInstallLayout();
+
+  let tlsCertPath;
+  let tlsKeyPath;
+
+  await ctx.step("Firewall", async () => {
+    if (config.configureUfw) {
+      const ufwReady = await ensureUfwAvailable(ctx);
+      if (ufwReady) {
+        configureFirewall(config, ctx.exec);
+      } else {
+        config.configureUfw = false;
+        printRequiredPorts(config);
+      }
+    } else {
+      printRequiredPorts(config);
+    }
+
+    if (config.mediaIpv4Only === "1") {
+      try {
+        const applied = applyMediaIpv4OnlyRules(mediaFirewallOptionsFromConfig(config));
+        console.log(`Applied IPv6 media block rules (${applied.backend}).`);
+      } catch (error) {
+        console.error(`IPv6 media block setup failed: ${error.message}`);
+        config.mediaIpv4Only = "0";
+      }
+    }
+  });
+
+  await ctx.step("TLS", async () => {
+    if (config.tlsMode === "custom") {
+      const custom = provisionCustomCert(config);
+      tlsCertPath = custom.certPath;
+      tlsKeyPath = custom.keyPath;
+    } else if (config.tlsMode === "dev-self-signed") {
+      tlsCertPath = path.join(SSL_DIR, "dev-fullchain.pem");
+      tlsKeyPath = path.join(SSL_DIR, "dev-privkey.pem");
+      generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 30, ctx.exec);
+    } else {
+      // Keep existing LE cert if domain matches, otherwise re-provision.
+      const envMap = loadEnvFile(ENV_PATH);
+      if (envMap.TLS_MODE === "letsencrypt" && envMap.TLS_CERT && fs.existsSync(envMap.TLS_CERT)) {
+        tlsCertPath = envMap.TLS_CERT;
+        tlsKeyPath = envMap.TLS_KEY;
+      } else {
+        tlsCertPath = path.join(SSL_DIR, "bootstrap-fullchain.pem");
+        tlsKeyPath = path.join(SSL_DIR, "bootstrap-privkey.pem");
+        generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 1, ctx.exec);
+      }
+    }
+
+    const envContent = renderEnvContent(config, tlsCertPath, tlsKeyPath);
+    writeFileWithMode(ENV_PATH, envContent, 0o600);
+    writeComposeTemplate();
+  });
+
+  await ctx.step("Start", async () => {
+    startGatewayStack(ctx.exec);
+    if (config.tlsMode === "letsencrypt" && (!tlsCertPath || !tlsCertPath.includes("letsencrypt"))) {
+      runLetsEncrypt(config, ctx.exec);
+    }
+  });
+
+  await ctx.step("Done", async () => {});
+
+  console.log("\nGateway reconfigured.");
+  console.log(`WSS URL: wss://${config.domain}`);
+}
+
 function runSystemctl(args, fallbackComposeArgs) {
   const result = run("systemctl", args, { check: false, stdio: "inherit" });
   if (result.status !== 0 && fallbackComposeArgs) {
@@ -1152,6 +1215,30 @@ function downCommand() {
 function restartCommand() {
   ensureInitialized();
   runSystemctl(["reload", SERVICE_NAME], ["restart"]);
+}
+
+function pauseCommand() {
+  ensureInitialized();
+  runCompose(["pause"], { stdio: "inherit" });
+  console.log("Gateway paused.");
+}
+
+function resumeCommand() {
+  ensureInitialized();
+  runCompose(["unpause"], { stdio: "inherit" });
+  console.log("Gateway resumed.");
+}
+
+function enableCommand() {
+  ensureInitialized();
+  run("systemctl", ["enable", SERVICE_NAME], { stdio: "inherit" });
+  console.log("Gateway will start on boot.");
+}
+
+function disableCommand() {
+  ensureInitialized();
+  run("systemctl", ["disable", SERVICE_NAME], { stdio: "inherit" });
+  console.log("Gateway will NOT start on boot.");
 }
 
 function logsCommand(service, options) {
@@ -1238,7 +1325,7 @@ function statusCommand() {
 
   console.log("\nConfig summary:");
   console.log(`DOMAIN=${envMap.DOMAIN || ""}`);
-  console.log(`BITCALL_ENV=${envMap.BITCALL_ENV || "dev"}`);
+  console.log(`BITCALL_ENV=${envMap.BITCALL_ENV || "production"}`);
   console.log(`ROUTING_MODE=${envMap.ROUTING_MODE || "universal"}`);
   console.log(`SIP_PROVIDER_URI=${envMap.SIP_PROVIDER_URI || ""}`);
   console.log(`DEPLOY_MODE=${envMap.DEPLOY_MODE || ""}`);
@@ -1318,8 +1405,24 @@ async function certInstallCommand(options) {
 
 function updateCommand() {
   ensureInitialized();
+  const envMap = loadEnvFile(ENV_PATH);
+  const currentImage = envMap.BITCALL_GATEWAY_IMAGE || "";
+  const targetImage = DEFAULT_GATEWAY_IMAGE;
+
+  if (currentImage === targetImage) {
+    console.log(`Image is current: ${targetImage}`);
+    console.log("Checking for newer image layers...");
+  } else {
+    console.log(`Updating image: ${currentImage || "(none)"} → ${targetImage}`);
+    updateGatewayEnv({ BITCALL_GATEWAY_IMAGE: targetImage });
+  }
+
   runCompose(["pull"], { stdio: "inherit" });
   runSystemctl(["reload", SERVICE_NAME], ["up", "-d", "--remove-orphans"]);
+
+  console.log(`\nGateway updated to ${PACKAGE_VERSION}.`);
+  console.log("To update the CLI itself:");
+  console.log("  sudo npm i -g @bitcall/webrtc-sip-gateway@latest");
 }
 
 function mediaStatusCommand() {
@@ -1402,11 +1505,40 @@ async function uninstallCommand(options) {
     fs.rmSync(RENEW_HOOK_PATH, { force: true });
   }
 
+  // Remove Bitcall-tagged UFW rules.
+  if (commandExists("ufw")) {
+    const ufwOutput = output("ufw", ["status", "numbered"]);
+    const lines = (ufwOutput || "").split("\n");
+    const ruleNumbers = [];
+    for (const line of lines) {
+      const match = line.match(/^\[\s*(\d+)\]/);
+      if (match && line.includes("Bitcall")) {
+        ruleNumbers.push(match[1]);
+      }
+    }
+
+    // Delete in reverse order so indices do not shift.
+    for (const num of ruleNumbers.reverse()) {
+      run("ufw", ["--force", "delete", num], { check: false, stdio: "inherit" });
+    }
+    if (ruleNumbers.length > 0) {
+      run("ufw", ["reload"], { check: false, stdio: "inherit" });
+      console.log(`Removed ${ruleNumbers.length} UFW rule(s).`);
+    }
+  }
+
   if (fs.existsSync(GATEWAY_DIR)) {
     fs.rmSync(GATEWAY_DIR, { recursive: true, force: true });
   }
 
   console.log("Gateway uninstalled.");
+  const domain = uninstallEnv.DOMAIN || "";
+  console.log("\nTo remove the CLI:");
+  console.log("  sudo npm uninstall -g @bitcall/webrtc-sip-gateway");
+  if (domain && uninstallEnv.TLS_MODE === "letsencrypt") {
+    console.log("\nTo remove Let's Encrypt certificate:");
+    console.log(`  sudo certbot delete --cert-name ${domain}`);
+  }
 }
 
 function configCommand() {
@@ -1432,7 +1564,7 @@ function buildProgram() {
     .description("Run setup wizard and provision gateway")
     .option("--advanced", "Show advanced configuration prompts")
     .option("--dev", "Quick dev setup (minimal prompts, permissive defaults)")
-    .option("--production", "Production setup (strict validation enabled)")
+    .option("--production", "Production setup profile")
     .option("--domain <domain>", "Gateway domain")
     .option("--email <email>", "Let's Encrypt email")
     .option("--verbose", "Stream full installer command output")
@@ -1463,6 +1595,18 @@ function buildProgram() {
 
   program.command("update").description("Pull latest image and restart service").action(updateCommand);
   program.command("config").description("Print active configuration (secrets hidden)").action(configCommand);
+  program.command("pause").description("Pause gateway containers").action(pauseCommand);
+  program.command("resume").description("Resume paused gateway containers").action(resumeCommand);
+  program.command("enable").description("Enable auto-start on boot").action(enableCommand);
+  program.command("disable").description("Disable auto-start on boot").action(disableCommand);
+  program
+    .command("reconfigure")
+    .description("Re-run wizard with current values as defaults")
+    .option("--advanced", "Show advanced configuration prompts")
+    .option("--dev", "Dev mode")
+    .option("--production", "Production mode")
+    .option("--verbose", "Verbose output")
+    .action(reconfigureCommand);
 
   const media = program.command("media").description("Media firewall operations");
   media.command("status").description("Show media IPv4-only firewall state").action(mediaStatusCommand);
@@ -1488,7 +1632,7 @@ module.exports = {
   main,
   normalizeInitProfile,
   validateProductionConfig,
-  buildDevWarnings,
+  buildSecurityNotes,
   buildQuickFlowDefaults,
   shouldRequireAllowlist,
   isOriginWildcard,
