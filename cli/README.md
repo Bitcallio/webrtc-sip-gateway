@@ -12,6 +12,10 @@ Latest updates:
 - Docker image includes `sngrep` and `tcpdump` for SIP troubleshooting.
 - `sip-trace` opens a live SIP message viewer using `sngrep` in the container
   via compose service execution.
+- Fixed nftables media firewall rule generation for IPv6 media-block mode
+  (nft-compatible port ranges and rule action order).
+- Media firewall status now checks both nft and ip6tables marker rules so
+  legacy ip6tables protections are reported correctly.
 - `TURN_MODE=coturn` now generates a compose stack with a dedicated coturn
   container.
 

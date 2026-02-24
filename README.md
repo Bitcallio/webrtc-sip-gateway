@@ -21,6 +21,10 @@ Bitcall WebRTC-to-SIP gateway repository.
   (with compatibility handling for legacy `--sip-trace` usage).
 - `bitcall-gateway update` now recreates containers after pull so newly pulled
   image layers are actually applied to running services.
+- Fixed nftables media firewall rule generation for IPv6 media-block mode
+  (valid nft port-range syntax + action ordering).
+- Media firewall state detection now checks both nft and ip6tables markers to
+  avoid false "disabled" status when legacy ip6tables rules are active.
 - `TURN_MODE=coturn` now writes a compose stack with a dedicated coturn service.
 
 ## End-user install (VPS)

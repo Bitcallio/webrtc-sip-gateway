@@ -65,6 +65,68 @@ function createIp6MockDeps() {
   };
 }
 
+function createNftFallbackDeps() {
+  const installed = new Set();
+  const calls = [];
+
+  function keyForCheck(args) {
+    return args.slice(1).join(" ");
+  }
+
+  function keyForInsert(args) {
+    return [args[1], ...args.slice(3)].join(" ");
+  }
+
+  function keyForDelete(args) {
+    return args.slice(1).join(" ");
+  }
+
+  return {
+    calls,
+    commandExists(command) {
+      return command === "nft" || command === "ip6tables" || command === "netfilter-persistent";
+    },
+    run(command, args = []) {
+      calls.push({ command, args: [...args] });
+
+      if (command === "nft") {
+        if (args[0] === "-f") {
+          throw new Error("nft apply failed");
+        }
+        if (args[0] === "list") {
+          return { status: 1, stdout: "", stderr: "" };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      }
+
+      if (command === "ip6tables") {
+        const action = args[0];
+        if (action === "-C") {
+          return { status: installed.has(keyForCheck(args)) ? 0 : 1, stdout: "", stderr: "" };
+        }
+        if (action === "-I") {
+          installed.add(keyForInsert(args));
+          return { status: 0, stdout: "", stderr: "" };
+        }
+        if (action === "-D") {
+          installed.delete(keyForDelete(args));
+          return { status: 0, stdout: "", stderr: "" };
+        }
+      }
+
+      return { status: 0, stdout: "", stderr: "" };
+    },
+    output(command, args = []) {
+      if (command === "sh" && args.includes("ip6tables-save 2>/dev/null || true")) {
+        return Array.from(installed)
+          .map((line) => `-A ${line}`)
+          .join("\n");
+      }
+      return "";
+    },
+  };
+}
+
 (function testDetectBackendPreference() {
   const backend = detectFirewallBackend({
     commandExists(command) {
@@ -109,8 +171,9 @@ function createIp6MockDeps() {
 
   const nft = buildNftRuleset({ turnEnabled: true });
   assert.match(nft, /table inet bitcall_gateway_media_ipv6/);
-  assert.match(nft, /meta nfproto ipv6 udp dport 10000:20000/);
+  assert.match(nft, /meta nfproto ipv6 udp dport 10000-20000/);
   assert.match(nft, /meta nfproto ipv6 tcp dport 5349/);
+  assert.match(nft, /drop comment "bitcall-gateway media ipv6 block"/);
   assert.match(nft, new RegExp(MARKER));
 })();
 
@@ -144,6 +207,29 @@ function createIp6MockDeps() {
   removeMediaIpv4OnlyRules(options, { backend: "ip6tables", deps });
   const presentAfterRemove = isMediaIpv4OnlyRulesPresent({ backend: "ip6tables", deps });
   assert.equal(presentAfterRemove.enabled, false);
+})();
+
+(function testNftFallbackToIp6tables() {
+  const deps = createNftFallbackDeps();
+  const result = applyMediaIpv4OnlyRules(
+    {
+      rtpMin: 10000,
+      rtpMax: 20000,
+      turnEnabled: true,
+      turnUdpPort: 3478,
+      turnsTcpPort: 5349,
+      turnRelayMin: 49152,
+      turnRelayMax: 49252,
+    },
+    { deps }
+  );
+
+  assert.equal(result.backend, "ip6tables");
+  assert.equal(result.fallbackFrom, "nft");
+
+  const state = isMediaIpv4OnlyRulesPresent({ deps });
+  assert.equal(state.enabled, true);
+  assert.equal(state.backend, "ip6tables");
 })();
 
 console.log("firewall tests passed");

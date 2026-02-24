@@ -94,8 +94,11 @@ function buildNftRuleset(options = {}) {
   ];
 
   for (const rule of rules) {
+    const nftDport = String(rule.dport).includes(":")
+      ? String(rule.dport).replace(":", "-")
+      : String(rule.dport);
     lines.push(
-      `    meta nfproto ipv6 ${rule.proto} dport ${rule.dport} comment \"${MARKER}\" drop`
+      `    meta nfproto ipv6 ${rule.proto} dport ${nftDport} drop comment \"${MARKER}\"`
     );
   }
 
@@ -282,8 +285,19 @@ function applyMediaIpv4OnlyRules(options = {}, runtime = {}) {
   const backend = runtime.backend || detectFirewallBackend(d);
 
   if (backend === "nft") {
-    applyNftRules(options, d);
-    return { backend };
+    try {
+      applyNftRules(options, d);
+      return { backend };
+    } catch (error) {
+      if (runtime.backend || !d.commandExists("ip6tables")) {
+        throw error;
+      }
+      applyIp6tablesRules(options, d);
+      return {
+        backend: "ip6tables",
+        fallbackFrom: "nft",
+      };
+    }
   }
 
   if (backend === "ip6tables") {
@@ -296,33 +310,77 @@ function applyMediaIpv4OnlyRules(options = {}, runtime = {}) {
 
 function removeMediaIpv4OnlyRules(options = {}, runtime = {}) {
   const d = withDeps(runtime.deps);
-  const backend = runtime.backend || detectFirewallBackend(d);
+  const backend = runtime.backend;
 
-  if (backend === "nft") {
+  if (!backend) {
+    const removed = [];
+
+    if (d.commandExists("nft") && isNftPresent(d)) {
+      removeNftRules(d);
+      removed.push("nft");
+    }
+    if (d.commandExists("ip6tables") && isIp6tablesPresent(d)) {
+      removeIp6tablesRules(options, d);
+      removed.push("ip6tables");
+    }
+
+    if (removed.length > 0) {
+      return { backend: removed.join("+") };
+    }
+  }
+
+  const selectedBackend = backend || detectFirewallBackend(d);
+
+  if (selectedBackend === "nft") {
     removeNftRules(d);
-    return { backend };
+    return { backend: selectedBackend };
   }
 
-  if (backend === "ip6tables") {
+  if (selectedBackend === "ip6tables") {
     removeIp6tablesRules(options, d);
-    return { backend };
+    return { backend: selectedBackend };
   }
 
-  throw new Error(`Unsupported firewall backend: ${backend}`);
+  throw new Error(`Unsupported firewall backend: ${selectedBackend}`);
 }
 
 function isMediaIpv4OnlyRulesPresent(runtime = {}) {
   const d = withDeps(runtime.deps);
-  let backend = runtime.backend;
+  const backend = runtime.backend;
 
-  try {
-    backend = backend || detectFirewallBackend(d);
-  } catch (error) {
-    return {
-      enabled: false,
-      backend: null,
-      error: error.message,
-    };
+  if (!backend) {
+    const nftEnabled = d.commandExists("nft") ? isNftPresent(d) : false;
+    if (nftEnabled) {
+      return {
+        enabled: true,
+        backend: "nft",
+        marker: MARKER,
+      };
+    }
+
+    const ip6tablesEnabled = d.commandExists("ip6tables") ? isIp6tablesPresent(d) : false;
+    if (ip6tablesEnabled) {
+      return {
+        enabled: true,
+        backend: "ip6tables",
+        marker: MARKER,
+      };
+    }
+
+    try {
+      const preferredBackend = detectFirewallBackend(d);
+      return {
+        enabled: false,
+        backend: preferredBackend,
+        marker: MARKER,
+      };
+    } catch (error) {
+      return {
+        enabled: false,
+        backend: null,
+        error: error.message,
+      };
+    }
   }
 
   if (backend === "nft") {
