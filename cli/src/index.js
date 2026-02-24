@@ -33,6 +33,12 @@ const {
   ensureComposePlugin,
 } = require("../lib/system");
 const { readTemplate, renderTemplate } = require("../lib/template");
+const {
+  detectFirewallBackend,
+  applyMediaIpv4OnlyRules,
+  removeMediaIpv4OnlyRules,
+  isMediaIpv4OnlyRulesPresent,
+} = require("../lib/firewall");
 
 const PACKAGE_VERSION = "0.2.5";
 
@@ -81,9 +87,11 @@ function envOrder() {
   return [
     "GATEWAY_VERSION",
     "BITCALL_GATEWAY_IMAGE",
+    "BITCALL_ENV",
     "DOMAIN",
     "PUBLIC_IP",
     "DEPLOY_MODE",
+    "ROUTING_MODE",
     "SIP_PROVIDER_URI",
     "SIP_UPSTREAM_TRANSPORT",
     "SIP_UPSTREAM_PORT",
@@ -103,8 +111,11 @@ function envOrder() {
     "WSS_LISTEN_PORT",
     "INTERNAL_WSS_PORT",
     "INTERNAL_WS_PORT",
-    "MEDIA_IPV6",
-    "MEDIA_FORCE_IPV4",
+    "MEDIA_IPV4_ONLY",
+    "TURN_UDP_PORT",
+    "TURNS_TCP_PORT",
+    "TURN_RELAY_MIN_PORT",
+    "TURN_RELAY_MAX_PORT",
     "RTPENGINE_MIN_PORT",
     "RTPENGINE_MAX_PORT",
     "WITH_REVERSE_PROXY",
@@ -200,6 +211,52 @@ function configureFirewall(config) {
 
   run("ufw", ["--force", "enable"], { check: false, stdio: "ignore" });
   run("ufw", ["reload"], { check: false, stdio: "ignore" });
+}
+
+function countAllowedDomains(raw) {
+  if (!raw) {
+    return 0;
+  }
+  return raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean).length;
+}
+
+function mediaFirewallOptionsFromConfig(config) {
+  return {
+    rtpMin: Number.parseInt(config.rtpMin || "10000", 10),
+    rtpMax: Number.parseInt(config.rtpMax || "20000", 10),
+    turnEnabled: config.turnMode === "coturn",
+    turnUdpPort: Number.parseInt(config.turnUdpPort || "3478", 10),
+    turnsTcpPort: Number.parseInt(config.turnsTcpPort || "5349", 10),
+    turnRelayMin: Number.parseInt(config.turnRelayMinPort || "49152", 10),
+    turnRelayMax: Number.parseInt(config.turnRelayMaxPort || "49252", 10),
+  };
+}
+
+function mediaFirewallOptionsFromEnv(envMap) {
+  return {
+    rtpMin: Number.parseInt(envMap.RTPENGINE_MIN_PORT || "10000", 10),
+    rtpMax: Number.parseInt(envMap.RTPENGINE_MAX_PORT || "20000", 10),
+    turnEnabled: (envMap.TURN_MODE || "none") === "coturn",
+    turnUdpPort: Number.parseInt(envMap.TURN_UDP_PORT || "3478", 10),
+    turnsTcpPort: Number.parseInt(envMap.TURNS_TCP_PORT || "5349", 10),
+    turnRelayMin: Number.parseInt(envMap.TURN_RELAY_MIN_PORT || "49152", 10),
+    turnRelayMax: Number.parseInt(envMap.TURN_RELAY_MAX_PORT || "49252", 10),
+  };
+}
+
+async function confirmContinueWithoutMediaBlock() {
+  const prompt = new Prompter();
+  try {
+    return await prompt.askYesNo(
+      "Continue without IPv6 media block (may cause no-audio on some networks)?",
+      false
+    );
+  } finally {
+    prompt.close();
+  }
 }
 
 function generateSelfSigned(certPath, keyPath, domain, days = 1) {
@@ -346,143 +403,179 @@ async function runWizard(existing = {}, preflight = {}) {
   try {
     const detectedIp = detectPublicIp();
     const domain = await prompt.askText("Gateway domain", existing.DOMAIN || "", { required: true });
-    const publicIp = await prompt.askText("Public IP", existing.PUBLIC_IP || detectedIp, {
-      required: true,
-    });
+    let publicIp = existing.PUBLIC_IP || detectedIp || "";
+    if (!publicIp) {
+      publicIp = await prompt.askText("Public IPv4 (auto-detect failed)", "", { required: true });
+    }
 
     const resolved = resolveDomainIpv4(domain);
     if (resolved.length > 0 && !resolved.includes(publicIp)) {
       console.log(`Warning: DNS for ${domain} resolves to ${resolved.join(", ")}, not ${publicIp}.`);
     }
 
-    const conflictModeDefault =
+    const autoDeployMode =
       (preflight.p80 && preflight.p80.inUse) || (preflight.p443 && preflight.p443.inUse)
-        ? 1
-        : 0;
-    const deployMode = await prompt.askChoice(
-      "Deployment mode",
-      ["standalone", "reverse-proxy"],
-      conflictModeDefault
-    );
+        ? "reverse-proxy"
+        : "standalone";
 
-    if (deployMode === "reverse-proxy") {
-      console.log("Note: forward /turn-credentials and websocket upgrade to 127.0.0.1:8443, and ACME path to 127.0.0.1:8080.");
-    }
+    const advanced = await prompt.askYesNo("Advanced setup", false);
 
-    const tlsMode = await prompt.askChoice(
-      "TLS certificate mode",
-      ["letsencrypt", "custom", "dev-self-signed"],
-      0
-    );
-
+    let deployMode = autoDeployMode;
+    let tlsMode = "letsencrypt";
     let acmeEmail = existing.ACME_EMAIL || "";
     let customCertPath = "";
     let customKeyPath = "";
-
-    if (tlsMode === "letsencrypt") {
-      acmeEmail = await prompt.askText("Let's Encrypt email", acmeEmail, { required: true });
-    } else if (tlsMode === "custom") {
-      customCertPath = await prompt.askText("Path to TLS certificate (PEM)", existing.TLS_CERT || "", {
-        required: true,
-      });
-      customKeyPath = await prompt.askText("Path to TLS private key (PEM)", existing.TLS_KEY || "", {
-        required: true,
-      });
-    }
-
-    const sipProviderHost = await prompt.askText(
-      "SIP provider host",
-      existing.SIP_PROVIDER_URI
-        ? existing.SIP_PROVIDER_URI.replace(/^sip:/, "").split(":")[0]
-        : DEFAULT_PROVIDER_HOST,
-      { required: true }
-    );
-
-    const sipTransportChoice = await prompt.askChoice(
-      "SIP provider transport",
-      ["udp", "tcp", "tls", "custom"],
-      0
-    );
-
-    let sipTransport = sipTransportChoice;
+    let bitcallEnv = existing.BITCALL_ENV || "production";
+    let routingMode = existing.ROUTING_MODE || "universal";
+    let sipProviderHost = DEFAULT_PROVIDER_HOST;
+    let sipTransport = "udp";
     let sipPort = "5060";
-
-    if (sipTransportChoice === "tcp" || sipTransportChoice === "udp") {
-      sipPort = "5060";
-    } else if (sipTransportChoice === "tls") {
-      sipPort = "5061";
-    } else {
-      sipTransport = await prompt.askChoice("Custom transport", ["udp", "tcp", "tls"], 0);
-      const defaultPort = sipTransport === "tls" ? "5061" : "5060";
-      sipPort = await prompt.askText("Custom SIP port", defaultPort, { required: true });
-    }
-
-    const sipProviderUri = `sip:${sipProviderHost}:${sipPort};transport=${sipTransport}`;
-
-    const allowedDomains = await prompt.askText(
-      "Allowed SIP domains (comma-separated; blank enables dev mode)",
-      existing.ALLOWED_SIP_DOMAINS || sipProviderHost
-    );
-
-    if (!allowedDomains.trim()) {
-      console.log("Warning: ALLOWED_SIP_DOMAINS is empty (dev mode, open relay risk).");
-    }
-
-    const sipTrustedIps = await prompt.askText(
-      "Trusted SIP source IPs (optional, comma-separated)",
-      existing.SIP_TRUSTED_IPS || ""
-    );
-
-    const turnMode = await prompt.askChoice("TURN mode", ["none", "external", "coturn"], 0);
-
-    let turnSecret = existing.TURN_SECRET || "";
+    let sipProviderUri = "";
+    let allowedDomains = existing.ALLOWED_SIP_DOMAINS || "";
+    let sipTrustedIps = existing.SIP_TRUSTED_IPS || "";
+    let turnMode = await prompt.askYesNo("Enable built-in TURN (coturn)?", true) ? "coturn" : "none";
+    let turnSecret = "";
     let turnTtl = existing.TURN_TTL || "86400";
     let turnApiToken = existing.TURN_API_TOKEN || "";
     let turnExternalUrls = "";
     let turnExternalUsername = "";
     let turnExternalCredential = "";
-
-    if (turnMode === "external") {
-      turnExternalUrls = await prompt.askText("External TURN urls", existing.TURN_EXTERNAL_URLS || "", {
-        required: true,
-      });
-      turnExternalUsername = await prompt.askText(
-        "External TURN username",
-        existing.TURN_EXTERNAL_USERNAME || ""
-      );
-      turnExternalCredential = await prompt.askText(
-        "External TURN credential",
-        existing.TURN_EXTERNAL_CREDENTIAL || ""
-      );
-    }
+    let webphoneOrigin = existing.WEBPHONE_ORIGIN || DEFAULT_WEBPHONE_ORIGIN;
+    let configureUfw = true;
+    let mediaIpv4Only = existing.MEDIA_IPV4_ONLY ? existing.MEDIA_IPV4_ONLY === "1" : true;
 
     if (turnMode === "coturn") {
       turnSecret = crypto.randomBytes(32).toString("hex");
-      turnTtl = await prompt.askText("TURN credential TTL seconds", turnTtl, { required: true });
-      turnApiToken = await prompt.askText("TURN API token (optional)", turnApiToken);
-    } else {
-      turnSecret = "";
-      turnApiToken = "";
     }
 
-    const webphoneOrigin = await prompt.askText(
-      "Allowed webphone origin (* for any)",
-      existing.WEBPHONE_ORIGIN || DEFAULT_WEBPHONE_ORIGIN
-    );
+    if (advanced) {
+      deployMode = await prompt.askChoice(
+        "Deployment mode",
+        ["standalone", "reverse-proxy"],
+        autoDeployMode === "reverse-proxy" ? 1 : 0
+      );
 
-    const mediaIpv6Enabled = await prompt.askYesNo(
-      "Enable IPv6 media candidates? (default: No)",
-      existing.MEDIA_IPV6 === "1"
-    );
+      tlsMode = await prompt.askChoice(
+        "TLS certificate mode",
+        ["letsencrypt", "custom", "dev-self-signed"],
+        0
+      );
 
-    const mediaForceIpv4Enabled = await prompt.askYesNo(
-      "Force IPv4-only SDP candidates? (default: Yes)",
-      existing.MEDIA_FORCE_IPV4
-        ? existing.MEDIA_FORCE_IPV4 === "1"
-        : !mediaIpv6Enabled
-    );
+      if (tlsMode === "custom") {
+        customCertPath = await prompt.askText("Path to TLS certificate (PEM)", existing.TLS_CERT || "", {
+          required: true,
+        });
+        customKeyPath = await prompt.askText("Path to TLS private key (PEM)", existing.TLS_KEY || "", {
+          required: true,
+        });
+      }
 
-    const configureUfw = await prompt.askYesNo("Configure ufw firewall rules now", true);
+      if (tlsMode === "letsencrypt") {
+        acmeEmail = await prompt.askText("Let's Encrypt email", acmeEmail, { required: true });
+      } else {
+        acmeEmail = "";
+      }
+
+      bitcallEnv = await prompt.askChoice("Environment", ["production", "dev"], bitcallEnv === "dev" ? 1 : 0);
+      allowedDomains = await prompt.askText(
+        "Allowed SIP domains (comma-separated; required in production)",
+        allowedDomains
+      );
+
+      routingMode = await prompt.askChoice(
+        "Routing mode",
+        ["universal", "single-provider"],
+        routingMode === "single-provider" ? 1 : 0
+      );
+
+      if (routingMode === "single-provider") {
+        sipProviderHost = await prompt.askText(
+          "SIP provider host",
+          existing.SIP_PROVIDER_URI
+            ? existing.SIP_PROVIDER_URI.replace(/^sip:/, "").split(":")[0]
+            : DEFAULT_PROVIDER_HOST,
+          { required: true }
+        );
+
+        const sipTransportChoice = await prompt.askChoice(
+          "SIP provider transport",
+          ["udp", "tcp", "tls", "custom"],
+          0
+        );
+
+        sipTransport = sipTransportChoice;
+        if (sipTransportChoice === "tcp" || sipTransportChoice === "udp") {
+          sipPort = "5060";
+        } else if (sipTransportChoice === "tls") {
+          sipPort = "5061";
+        } else {
+          sipTransport = await prompt.askChoice("Custom transport", ["udp", "tcp", "tls"], 0);
+          sipPort = await prompt.askText(
+            "Custom SIP port",
+            sipTransport === "tls" ? "5061" : "5060",
+            { required: true }
+          );
+        }
+
+        sipProviderUri = `sip:${sipProviderHost}:${sipPort};transport=${sipTransport}`;
+      }
+
+      sipTrustedIps = await prompt.askText(
+        "Trusted SIP source IPs (optional, comma-separated)",
+        sipTrustedIps
+      );
+
+      const turnDefaultIndex = turnMode === "external" ? 2 : turnMode === "coturn" ? 1 : 0;
+      turnMode = await prompt.askChoice("TURN mode", ["none", "coturn", "external"], turnDefaultIndex);
+      if (turnMode === "coturn") {
+        turnSecret = crypto.randomBytes(32).toString("hex");
+        turnTtl = await prompt.askText("TURN credential TTL seconds", turnTtl, { required: true });
+        turnApiToken = await prompt.askText("TURN API token (optional)", turnApiToken);
+      } else if (turnMode === "external") {
+        turnSecret = "";
+        turnApiToken = "";
+        turnExternalUrls = await prompt.askText("External TURN urls", existing.TURN_EXTERNAL_URLS || "", {
+          required: true,
+        });
+        turnExternalUsername = await prompt.askText(
+          "External TURN username",
+          existing.TURN_EXTERNAL_USERNAME || ""
+        );
+        turnExternalCredential = await prompt.askText(
+          "External TURN credential",
+          existing.TURN_EXTERNAL_CREDENTIAL || ""
+        );
+      } else {
+        turnSecret = "";
+        turnApiToken = "";
+      }
+
+      webphoneOrigin = await prompt.askText(
+        "Allowed webphone origin (* for any)",
+        webphoneOrigin
+      );
+
+      mediaIpv4Only = await prompt.askYesNo(
+        "Media IPv4-only mode (block IPv6 RTP/TURN on host firewall)",
+        mediaIpv4Only
+      );
+
+      configureUfw = await prompt.askYesNo("Configure ufw firewall rules now", true);
+    } else {
+      acmeEmail = await prompt.askText("Let's Encrypt email", acmeEmail, { required: true });
+    }
+
+    if (bitcallEnv === "production" && !allowedDomains.trim()) {
+      throw new Error(
+        "Production mode requires ALLOWED_SIP_DOMAINS. Re-run init with Advanced=Yes and provide allowlisted SIP domains, or switch Environment to dev."
+      );
+    }
+
+    if (deployMode === "reverse-proxy") {
+      console.log(
+        "Note: forward /turn-credentials and websocket upgrade to 127.0.0.1:8443, and ACME path to 127.0.0.1:8080."
+      );
+    }
 
     const config = {
       domain,
@@ -492,6 +585,8 @@ async function runWizard(existing = {}, preflight = {}) {
       acmeEmail,
       customCertPath,
       customKeyPath,
+      bitcallEnv,
+      routingMode,
       sipProviderHost,
       sipTransport,
       sipPort,
@@ -506,10 +601,13 @@ async function runWizard(existing = {}, preflight = {}) {
       turnExternalUsername,
       turnExternalCredential,
       webphoneOrigin,
-      mediaIpv6: mediaIpv6Enabled ? "1" : "0",
-      mediaForceIpv4: mediaForceIpv4Enabled ? "1" : "0",
-      rtpMin: "10000",
-      rtpMax: "20000",
+      mediaIpv4Only: mediaIpv4Only ? "1" : "0",
+      rtpMin: existing.RTPENGINE_MIN_PORT || "10000",
+      rtpMax: existing.RTPENGINE_MAX_PORT || "20000",
+      turnUdpPort: existing.TURN_UDP_PORT || "3478",
+      turnsTcpPort: existing.TURNS_TCP_PORT || "5349",
+      turnRelayMinPort: existing.TURN_RELAY_MIN_PORT || "49152",
+      turnRelayMaxPort: existing.TURN_RELAY_MAX_PORT || "49252",
       acmeListenPort: deployMode === "reverse-proxy" ? "8080" : "80",
       wssListenPort: deployMode === "reverse-proxy" ? "8443" : "443",
       internalWssPort: "8443",
@@ -517,16 +615,19 @@ async function runWizard(existing = {}, preflight = {}) {
       configureUfw,
     };
 
+    const allowedCount = countAllowedDomains(config.allowedDomains);
     console.log("\nSummary:");
     console.log(`  Domain: ${config.domain}`);
     console.log(`  Public IP: ${config.publicIp}`);
-    console.log(`  Deploy mode: ${config.deployMode}`);
-    console.log(`  TLS mode: ${config.tlsMode}`);
-    console.log(`  SIP provider URI: ${config.sipProviderUri}`);
-    console.log(`  Allowed SIP domains: ${config.allowedDomains || "(empty/dev-mode)"}`);
-    console.log(`  TURN mode: ${config.turnMode}`);
-    console.log(`  IPv6 media candidates: ${config.mediaIpv6 === "1" ? "enabled" : "disabled (IPv4-only)"}`);
-    console.log(`  Force IPv4 SDP strip: ${config.mediaForceIpv4 === "1" ? "enabled" : "disabled"}`);
+    console.log(`  TLS: ${config.tlsMode === "letsencrypt" ? "Let's Encrypt" : config.tlsMode}`);
+    console.log(`  Deploy mode: ${config.deployMode}${advanced ? "" : " (auto)"}`);
+    console.log(`  TURN: ${config.turnMode}`);
+    console.log(
+      `  Media: ${config.mediaIpv4Only === "1" ? "IPv4-only (IPv6 signaling allowed; IPv6 media blocked)" : "dual-stack"}`
+    );
+    console.log(
+      `  Security: Allowed SIP domains ${allowedCount > 0 ? `${allowedCount} entries` : "not set"}`
+    );
 
     const proceed = await prompt.askYesNo("Proceed with provisioning", true);
     if (!proceed) {
@@ -553,9 +654,11 @@ function renderEnvContent(config, tlsCert, tlsKey) {
   const content = renderTemplate(".env.template", {
     GATEWAY_VERSION: PACKAGE_VERSION,
     BITCALL_GATEWAY_IMAGE: DEFAULT_GATEWAY_IMAGE,
+    BITCALL_ENV: config.bitcallEnv,
     DOMAIN: config.domain,
     PUBLIC_IP: config.publicIp,
     DEPLOY_MODE: config.deployMode,
+    ROUTING_MODE: config.routingMode,
     SIP_PROVIDER_URI: config.sipProviderUri,
     SIP_UPSTREAM_TRANSPORT: config.sipTransport,
     SIP_UPSTREAM_PORT: config.sipPort,
@@ -575,8 +678,11 @@ function renderEnvContent(config, tlsCert, tlsKey) {
     WSS_LISTEN_PORT: config.wssListenPort,
     INTERNAL_WSS_PORT: config.internalWssPort,
     INTERNAL_WS_PORT: config.internalWsPort,
-    MEDIA_IPV6: config.mediaIpv6,
-    MEDIA_FORCE_IPV4: config.mediaForceIpv4,
+    MEDIA_IPV4_ONLY: config.mediaIpv4Only,
+    TURN_UDP_PORT: config.turnUdpPort,
+    TURNS_TCP_PORT: config.turnsTcpPort,
+    TURN_RELAY_MIN_PORT: config.turnRelayMinPort,
+    TURN_RELAY_MAX_PORT: config.turnRelayMaxPort,
   });
 
   let extra = "";
@@ -696,6 +802,22 @@ async function initCommand() {
     configureFirewall(config);
   }
 
+  if (config.mediaIpv4Only === "1") {
+    try {
+      const applied = applyMediaIpv4OnlyRules(mediaFirewallOptionsFromConfig(config));
+      console.log(`Applied IPv6 media block rules (${applied.backend}).`);
+    } catch (error) {
+      console.error(`IPv6 media block setup failed: ${error.message}`);
+      const proceed = await confirmContinueWithoutMediaBlock();
+      if (!proceed) {
+        throw new Error("Initialization stopped because media IPv4-only firewall rules were not applied.");
+      }
+      updateGatewayEnv({ MEDIA_IPV4_ONLY: "0" });
+      config.mediaIpv4Only = "0";
+      console.log("Continuing without IPv6 media block rules.");
+    }
+  }
+
   startGatewayStack();
 
   if (config.tlsMode === "letsencrypt") {
@@ -783,6 +905,8 @@ function statusCommand() {
       }).status === 0;
   }
 
+  const mediaStatus = isMediaIpv4OnlyRulesPresent();
+
   console.log("Bitcall Gateway Status\n");
   console.log(`Gateway service: ${formatMark(active)} ${active ? "running" : "stopped"}`);
   console.log(`Auto-start: ${formatMark(enabled)} ${enabled ? "enabled" : "disabled"}`);
@@ -792,8 +916,17 @@ function statusCommand() {
   console.log(`Port ${envMap.WSS_LISTEN_PORT || "443"}: ${formatMark(p443.inUse)} listening`);
   console.log(`Port 5060: ${formatMark(p5060.inUse)} listening`);
   console.log(`rtpengine control: ${formatMark(rtpReady)} reachable`);
-  console.log(`IPv6 media candidates: ${(envMap.MEDIA_IPV6 || "0") === "1" ? "enabled" : "disabled (IPv4-only)"}`);
-  console.log(`Force IPv4 SDP strip: ${(envMap.MEDIA_FORCE_IPV4 || "1") === "1" ? "enabled" : "disabled"}`);
+  if (mediaStatus.backend) {
+    console.log(`Media IPv4-only: ${mediaStatus.enabled ? "enabled" : "disabled"}`);
+    console.log(`Media firewall backend: ${mediaStatus.backend}`);
+  } else {
+    console.log(`Media IPv4-only: disabled (backend unavailable)`);
+  }
+  if (!mediaStatus.enabled) {
+    console.log(
+      "Warning: IPv6 media may cause no-audio on some clients; enable via `bitcall-gateway media ipv4-only on`"
+    );
+  }
   if (envMap.TURN_MODE && envMap.TURN_MODE !== "none") {
     console.log(`/turn-credentials: ${formatMark(turnReady)} reachable`);
   }
@@ -807,12 +940,13 @@ function statusCommand() {
 
   console.log("\nConfig summary:");
   console.log(`DOMAIN=${envMap.DOMAIN || ""}`);
+  console.log(`BITCALL_ENV=${envMap.BITCALL_ENV || "production"}`);
+  console.log(`ROUTING_MODE=${envMap.ROUTING_MODE || "universal"}`);
   console.log(`SIP_PROVIDER_URI=${envMap.SIP_PROVIDER_URI || ""}`);
   console.log(`DEPLOY_MODE=${envMap.DEPLOY_MODE || ""}`);
   console.log(`ALLOWED_SIP_DOMAINS=${envMap.ALLOWED_SIP_DOMAINS || ""}`);
   console.log(`TURN_MODE=${envMap.TURN_MODE || "none"}`);
-  console.log(`MEDIA_IPV6=${envMap.MEDIA_IPV6 || "0"}`);
-  console.log(`MEDIA_FORCE_IPV4=${envMap.MEDIA_FORCE_IPV4 || "1"}`);
+  console.log(`MEDIA_IPV4_ONLY=${envMap.MEDIA_IPV4_ONLY || "1"}`);
 }
 
 function certStatusCommand() {
@@ -890,6 +1024,42 @@ function updateCommand() {
   runSystemctl(["reload", SERVICE_NAME], ["up", "-d", "--remove-orphans"]);
 }
 
+function mediaStatusCommand() {
+  ensureInitialized();
+  const envMap = loadEnvFile(ENV_PATH);
+  const desired = (envMap.MEDIA_IPV4_ONLY || "1") === "1";
+  const state = isMediaIpv4OnlyRulesPresent();
+
+  console.log("Media firewall status\n");
+  console.log(`Configured mode: ${desired ? "IPv4-only" : "dual-stack"}`);
+  if (!state.backend) {
+    console.log(`Backend: unavailable (${state.error || "not detected"})`);
+    console.log("Rules active: no");
+    return;
+  }
+
+  console.log(`Backend: ${state.backend}`);
+  console.log(`Rules active: ${state.enabled ? "yes" : "no"}`);
+}
+
+function mediaIpv4OnlyOnCommand() {
+  ensureInitialized();
+  const envMap = loadEnvFile(ENV_PATH);
+  const options = mediaFirewallOptionsFromEnv(envMap);
+  const applied = applyMediaIpv4OnlyRules(options);
+  updateGatewayEnv({ MEDIA_IPV4_ONLY: "1" });
+  console.log(`Enabled IPv6 media block rules (${applied.backend}).`);
+}
+
+function mediaIpv4OnlyOffCommand() {
+  ensureInitialized();
+  const envMap = loadEnvFile(ENV_PATH);
+  const options = mediaFirewallOptionsFromEnv(envMap);
+  const removed = removeMediaIpv4OnlyRules(options);
+  updateGatewayEnv({ MEDIA_IPV4_ONLY: "0" });
+  console.log(`Disabled IPv6 media block rules (${removed.backend}).`);
+}
+
 async function uninstallCommand(options) {
   if (!options.yes) {
     const prompt = new Prompter();
@@ -901,6 +1071,18 @@ async function uninstallCommand(options) {
     } finally {
       prompt.close();
     }
+  }
+
+  let uninstallEnv = {};
+  if (fs.existsSync(ENV_PATH)) {
+    uninstallEnv = loadEnvFile(ENV_PATH);
+  }
+
+  try {
+    const backend = detectFirewallBackend();
+    removeMediaIpv4OnlyRules(mediaFirewallOptionsFromEnv(uninstallEnv), { backend });
+  } catch (error) {
+    console.log(`Warning: failed to remove IPv6 media firewall rules automatically: ${error.message}`);
   }
 
   run("systemctl", ["stop", SERVICE_NAME], { check: false, stdio: "inherit" });
@@ -974,6 +1156,13 @@ function buildProgram() {
 
   program.command("update").description("Pull latest image and restart service").action(updateCommand);
   program.command("config").description("Print active configuration (secrets hidden)").action(configCommand);
+
+  const media = program.command("media").description("Media firewall operations");
+  media.command("status").description("Show media IPv4-only firewall state").action(mediaStatusCommand);
+  const mediaIpv4Only = media.command("ipv4-only").description("Toggle IPv6 media block");
+  mediaIpv4Only.command("on").description("Enable IPv4-only media mode").action(mediaIpv4OnlyOnCommand);
+  mediaIpv4Only.command("off").description("Disable IPv4-only media mode").action(mediaIpv4OnlyOffCommand);
+
   program
     .command("uninstall")
     .description("Remove gateway service and files")
