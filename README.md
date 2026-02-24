@@ -14,13 +14,20 @@ Bitcall WebRTC-to-SIP gateway repository.
 sudo apt-get update && sudo apt-get install -y curl ca-certificates
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.7
+sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.8
 sudo bitcall-gateway init --dev
 ```
 
-Default installer behavior is dev-friendly and works with minimal prompts.
+Default `init` behavior is dev-friendly and uses permissive defaults:
+- `BITCALL_ENV=dev`
+- `ROUTING_MODE=universal`
+- `ALLOWED_SIP_DOMAINS=""` (any provider domains, dev warning shown)
+- `WEBPHONE_ORIGIN="*"` (any origin, dev warning shown)
+- `SIP_TRUSTED_IPS=""` (any source IPs)
+
 For hardened installs use `sudo bitcall-gateway init --production` (or add
-`--advanced` for full control).
+`--advanced` for full control). In production + universal routing, provider
+allowlist is required.
 Use `--verbose` to stream installer command output; default output is concise
 and full command logs are written to `/var/log/bitcall-gateway-install.log`.
 

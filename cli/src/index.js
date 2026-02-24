@@ -40,7 +40,7 @@ const {
   isMediaIpv4OnlyRulesPresent,
 } = require("../lib/firewall");
 
-const PACKAGE_VERSION = "0.2.7";
+const PACKAGE_VERSION = "0.2.8";
 const INSTALL_LOG_PATH = "/var/log/bitcall-gateway-install.log";
 
 function printBanner() {
@@ -545,6 +545,7 @@ function toOriginPattern(origin) {
 }
 
 function normalizeInitProfile(initOptions = {}, existing = {}) {
+  void existing;
   if (initOptions.dev && initOptions.production) {
     throw new Error("Use only one mode: --dev or --production.");
   }
@@ -554,7 +555,7 @@ function normalizeInitProfile(initOptions = {}, existing = {}) {
   if (initOptions.dev) {
     return "dev";
   }
-  return existing.BITCALL_ENV || "dev";
+  return "dev";
 }
 
 async function runPreflight(ctx) {
@@ -603,12 +604,20 @@ async function runPreflight(ctx) {
 function printSummary(config, devWarnings) {
   const allowedCount = countAllowedDomains(config.allowedDomains);
   const showDevWarnings = config.bitcallEnv === "dev";
+  const providerAllowlistSummary =
+    allowedCount > 0
+      ? config.allowedDomains
+      : config.bitcallEnv === "production"
+        ? isSingleProviderConfigured(config)
+          ? "(single-provider mode)"
+          : "(missing)"
+        : "(any)";
   console.log("\nSummary:");
   console.log(`  Domain: ${config.domain}`);
   console.log(`  Environment: ${config.bitcallEnv}`);
   console.log(`  Routing: ${config.routingMode}`);
   console.log(
-    `  Provider allowlist: ${allowedCount > 0 ? config.allowedDomains : "(any)"}${showDevWarnings && allowedCount === 0 ? " [DEV WARNING]" : ""}`
+    `  Provider allowlist: ${providerAllowlistSummary}${showDevWarnings && allowedCount === 0 ? " [DEV WARNING]" : ""}`
   );
   console.log(
     `  Webphone origin: ${config.webphoneOrigin === "*" ? `(any)${showDevWarnings ? " [DEV WARNING]" : ""}` : config.webphoneOrigin}`
@@ -627,6 +636,10 @@ function printSummary(config, devWarnings) {
       console.log(`  - ${warning}`);
     }
   }
+}
+
+function shouldRequireAllowlist(bitcallEnv, routingMode) {
+  return bitcallEnv === "production" && routingMode === "universal";
 }
 
 function parseProviderFromUri(uri = "") {
@@ -698,16 +711,12 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
     let turnExternalUsername = "";
     let turnExternalCredential = "";
     let webphoneOrigin = existing.WEBPHONE_ORIGIN || DEFAULT_WEBPHONE_ORIGIN;
-    let configureUfw = initOptions.dev ? true : await prompt.askYesNo("Configure UFW firewall rules now?", true);
+    let configureUfw = await prompt.askYesNo("Configure UFW firewall rules now?", true);
     let mediaIpv4Only = existing.MEDIA_IPV4_ONLY ? existing.MEDIA_IPV4_ONLY === "1" : true;
 
     if (!advanced) {
       acmeEmail = acmeEmail || (await prompt.askText("Let's Encrypt email", "", { required: true }));
-      if (!initOptions.dev) {
-        turnMode = await prompt.askYesNo("Enable built-in TURN (coturn)?", true) ? "coturn" : "none";
-      } else {
-        turnMode = "coturn";
-      }
+      turnMode = await prompt.askYesNo("Enable built-in TURN (coturn)?", true) ? "coturn" : "none";
       const quickDefaults = buildQuickFlowDefaults(initProfile, existing);
       bitcallEnv = quickDefaults.bitcallEnv;
       routingMode = quickDefaults.routingMode;
@@ -748,11 +757,6 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
       if (!initOptions.dev && !initOptions.production) {
         bitcallEnv = await prompt.askChoice("Environment", ["production", "dev"], bitcallEnv === "dev" ? 1 : 0);
       }
-      allowedDomains = await prompt.askText(
-        "Allowed SIP domains (comma-separated)",
-        allowedDomains
-      );
-
       routingMode = await prompt.askChoice(
         "Routing mode",
         ["universal", "single-provider"],
@@ -790,6 +794,15 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
 
         sipProviderUri = `sip:${sipProviderHost}:${sipPort};transport=${sipTransport}`;
       }
+
+      const requireAllowlist = shouldRequireAllowlist(bitcallEnv, routingMode);
+      allowedDomains = await prompt.askText(
+        requireAllowlist
+          ? "Allowed SIP domains (comma-separated; required in production universal mode)"
+          : "Allowed SIP domains (comma-separated)",
+        allowedDomains,
+        { required: requireAllowlist }
+      );
 
       sipTrustedIps = await prompt.askText(
         "Trusted SIP source IPs (optional, comma-separated)",
@@ -888,11 +901,9 @@ async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
     const devWarnings = config.bitcallEnv === "dev" ? buildDevWarnings(config) : [];
     printSummary(config, devWarnings);
 
-    if (!(initOptions.dev && !advanced)) {
-      const proceed = await prompt.askYesNo("Proceed with provisioning", true);
-      if (!proceed) {
-        throw new Error("Initialization canceled.");
-      }
+    const proceed = await prompt.askYesNo("Proceed with provisioning", true);
+    if (!proceed) {
+      throw new Error("Initialization canceled.");
     }
 
     return config;
@@ -1479,6 +1490,7 @@ module.exports = {
   validateProductionConfig,
   buildDevWarnings,
   buildQuickFlowDefaults,
+  shouldRequireAllowlist,
   isOriginWildcard,
   isSingleProviderConfigured,
   printRequiredPorts,
