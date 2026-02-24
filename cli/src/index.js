@@ -3,7 +3,6 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { Command } = require("commander");
 
 const {
   GATEWAY_DIR,
@@ -41,14 +40,65 @@ const {
 } = require("../lib/firewall");
 
 const PACKAGE_VERSION = require("../package.json").version;
+// -- ANSI color helpers (zero dependencies) --
+const _c = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  red: "\x1b[31m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  cyan: "\x1b[36m",
+  white: "\x1b[37m",
+};
+const _color = process.stdout.isTTY && !process.env.NO_COLOR;
+function clr(style, text) {
+  return _color ? `${style}${text}${_c.reset}` : text;
+}
+
 const INSTALL_LOG_PATH = "/var/log/bitcall-gateway-install.log";
 
 function printBanner() {
-  console.log("========================================");
-  console.log("  BITCALL WEBRTC-SIP GATEWAY INSTALLER");
-  console.log(`  version ${PACKAGE_VERSION}`);
-  console.log("  one-line deploy for browser SIP");
-  console.log("========================================\n");
+  const v = `v${PACKAGE_VERSION}`;
+
+  if (!_color) {
+    console.log("\n  BITCALL\n  WebRTC → SIP Gateway  " + v);
+    console.log("  one-line deploy · any provider\n");
+    return;
+  }
+
+  // Block-letter BITCALL — each line is one string, do not modify
+  const art = [
+    "██████  ██ ████████  ██████  █████  ██      ██",
+    "██   ██ ██    ██    ██      ██   ██ ██      ██",
+    "██████  ██    ██    ██      ███████ ██      ██",
+    "██   ██ ██    ██    ██      ██   ██ ██      ██",
+    "██████  ██    ██     ██████ ██   ██ ███████ ███████",
+  ];
+
+  const W = 55; // inner box width
+  const top = `  ${_c.cyan}╔${"═".repeat(W)}╗${_c.reset}`;
+  const bot = `  ${_c.cyan}╚${"═".repeat(W)}╝${_c.reset}`;
+  const blank = `  ${_c.cyan}║${_c.reset}${" ".repeat(W)}${_c.cyan}║${_c.reset}`;
+
+  function row(content, pad) {
+    const visible = content.replace(/\x1b\[[0-9;]*m/g, "");
+    const fill = Math.max(0, W - (pad || 0) - visible.length);
+    return `  ${_c.cyan}║${_c.reset}${"".padEnd(pad || 0)}${content}${" ".repeat(fill)}${_c.cyan}║${_c.reset}`;
+  }
+
+  console.log("");
+  console.log(top);
+  console.log(blank);
+  for (const line of art) {
+    console.log(row(`${_c.bold}${_c.white}${line}${_c.reset}`, 3));
+  }
+  console.log(blank);
+  console.log(row(`${_c.dim}WebRTC → SIP Gateway${_c.reset}`, 3));
+  console.log(row(`${_c.dim}one-line deploy · any provider${_c.reset}        ${_c.dim}${v}${_c.reset}`, 3));
+  console.log(blank);
+  console.log(bot);
+  console.log("");
 }
 
 function createInstallContext(options = {}) {
@@ -104,15 +154,15 @@ function createInstallContext(options = {}) {
 
   async function step(label, fn) {
     state.index += 1;
-    console.log(`[${state.index}/${steps.length}] ${label}...`);
+    console.log(`  ${clr(_c.dim, `[${state.index}/${steps.length}]`)} ${clr(_c.bold, label)}...`);
     const started = Date.now();
     try {
       const value = await fn();
       const elapsed = ((Date.now() - started) / 1000).toFixed(1);
-      console.log(`✓ ${label} (${elapsed}s)\n`);
+      console.log(`  ${clr(_c.green, "✓")} ${clr(_c.bold, label)} ${clr(_c.dim, `(${elapsed}s)`)}\n`);
       return value;
     } catch (error) {
-      console.error(`✗ ${label} failed: ${error.message}`);
+      console.error(`  ${clr(_c.red, "✗")} ${clr(_c.bold + _c.red, label + " failed:")} ${error.message}`);
       if (!verbose) {
         console.error(`Install log: ${INSTALL_LOG_PATH}`);
       }
@@ -602,32 +652,27 @@ async function runPreflight(ctx) {
   };
 }
 
-function printSummary(config, securityNotes) {
+function printSummary(config, notes) {
   const allowedCount = countAllowedDomains(config.allowedDomains);
-  const providerAllowlistSummary =
-    allowedCount > 0
-      ? config.allowedDomains
-      : isSingleProviderConfigured(config)
-        ? "(single-provider mode)"
-        : "(any)";
-  console.log("\nSummary:");
-  console.log(`  Domain: ${config.domain}`);
-  console.log(`  Environment: ${config.bitcallEnv}`);
-  console.log(`  Routing: ${config.routingMode}`);
-  console.log(`  Provider allowlist: ${providerAllowlistSummary}`);
-  console.log(`  Webphone origin: ${config.webphoneOrigin === "*" ? "(any)" : config.webphoneOrigin}`);
-  console.log(`  SIP source IPs: ${(config.sipTrustedIps || "").trim() ? config.sipTrustedIps : "(any)"}`);
-  console.log(`  TLS: ${config.tlsMode === "letsencrypt" ? "Let's Encrypt" : config.tlsMode}`);
-  console.log(`  TURN: ${config.turnMode === "coturn" ? "enabled (coturn)" : config.turnMode}`);
-  console.log(
-    `  Media: ${config.mediaIpv4Only === "1" ? "IPv4-only (IPv6 media blocked)" : "dual-stack"}`
-  );
-  console.log(`  Firewall: ${config.configureUfw ? "UFW enabled" : "manual setup"}`);
+  console.log(`\n${clr(_c.bold + _c.cyan, "  ┌─ Configuration ──────────────────────────────┐")}`);
+  console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "Domain:")}         ${config.domain}`);
+  console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "Environment:")}    ${config.bitcallEnv}`);
+  console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "Routing:")}        ${config.routingMode}`);
+  console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "Allowlist:")}      ${allowedCount > 0 ? config.allowedDomains : "(any)"}`);
+  console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "Origin:")}         ${config.webphoneOrigin === "*" ? "(any)" : config.webphoneOrigin}`);
+  console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "SIP source IPs:")} ${(config.sipTrustedIps || "").trim() ? config.sipTrustedIps : "(any)"}`);
+  console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "TLS:")}            ${config.tlsMode === "letsencrypt" ? "Let's Encrypt" : config.tlsMode}`);
+  console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "TURN:")}           ${config.turnMode === "coturn" ? "enabled (coturn)" : config.turnMode}`);
+  console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "Media:")}          ${config.mediaIpv4Only === "1" ? "IPv4-only (IPv6 media blocked)" : "dual-stack"}`);
+  if (config.configureUfw) {
+    console.log(`${clr(_c.cyan, "  │")}  ${clr(_c.dim, "Firewall:")}       UFW enabled`);
+  }
+  console.log(`${clr(_c.bold + _c.cyan, "  └─────────────────────────────────────────────┘")}`);
 
-  if (securityNotes.length > 0) {
-    console.log("\nInfo:");
-    for (const note of securityNotes) {
-      console.log(`  ℹ ${note}`);
+  if (notes.length > 0) {
+    console.log("");
+    for (const note of notes) {
+      console.log(`  ${clr(_c.dim, "ℹ")} ${clr(_c.dim, note)}`);
     }
   }
 }
@@ -1013,7 +1058,6 @@ function installGatewayService(exec = run) {
 
 async function initCommand(initOptions = {}) {
   printBanner();
-  const ctx = createInstallContext(initOptions);
 
   // If re-running init on an existing installation, stop the current
   // gateway so our own ports don't fail the preflight check.
@@ -1022,9 +1066,11 @@ async function initCommand(initOptions = {}) {
     try {
       runCompose(["down"], { stdio: "pipe" });
     } catch (_e) {
-      // Ignore errors - gateway may already be stopped or corrupted
+      // Ignore — gateway may already be stopped or config may be corrupted
     }
   }
+
+  const ctx = createInstallContext(initOptions);
 
   let preflight;
   await ctx.step("Checks", async () => {
@@ -1109,14 +1155,19 @@ async function initCommand(initOptions = {}) {
 
   await ctx.step("Done", async () => {});
 
-  console.log("\nGateway initialized.");
-  console.log(`WSS URL: wss://${config.domain}`);
+  console.log("");
+  console.log(clr(_c.bold + _c.green, "  ╔══════════════════════════════════════╗"));
+  console.log(clr(_c.bold + _c.green, "  ║") + "  Gateway is " + clr(_c.bold + _c.green, "READY") + "                  " + clr(_c.bold + _c.green, "║"));
+  console.log(clr(_c.bold + _c.green, "  ╚══════════════════════════════════════╝"));
+  console.log("");
+  console.log(`  ${clr(_c.bold, "WSS")}   ${clr(_c.cyan, `wss://${config.domain}`)}`);
   if (config.turnMode !== "none") {
-    console.log(`TURN credentials URL: https://${config.domain}/turn-credentials`);
+    console.log(`  ${clr(_c.bold, "TURN")}  ${clr(_c.cyan, `https://${config.domain}/turn-credentials`)}`);
   }
   if (!ctx.verbose) {
-    console.log(`Install log: ${ctx.logPath}`);
+    console.log(`  ${clr(_c.dim, `Log:   ${ctx.logPath}`)}`);
   }
+  console.log("");
 }
 
 async function reconfigureCommand(options) {
@@ -1129,7 +1180,7 @@ async function reconfigureCommand(options) {
     try {
       runCompose(["down"], { stdio: "pipe" });
     } catch (_e) {
-      // Ignore if compose fails (corrupted state, already stopped)
+      // Ignore — gateway may already be stopped or config may be corrupted
     }
   }
 
@@ -1212,8 +1263,19 @@ async function reconfigureCommand(options) {
 
   await ctx.step("Done", async () => {});
 
-  console.log("\nGateway reconfigured.");
-  console.log(`WSS URL: wss://${config.domain}`);
+  console.log("");
+  console.log(clr(_c.bold + _c.green, "  ╔══════════════════════════════════════╗"));
+  console.log(clr(_c.bold + _c.green, "  ║") + "  Gateway is " + clr(_c.bold + _c.green, "READY") + "                  " + clr(_c.bold + _c.green, "║"));
+  console.log(clr(_c.bold + _c.green, "  ╚══════════════════════════════════════╝"));
+  console.log("");
+  console.log(`  ${clr(_c.bold, "WSS")}   ${clr(_c.cyan, `wss://${config.domain}`)}`);
+  if (config.turnMode !== "none") {
+    console.log(`  ${clr(_c.bold, "TURN")}  ${clr(_c.cyan, `https://${config.domain}/turn-credentials`)}`);
+  }
+  if (!ctx.verbose) {
+    console.log(`  ${clr(_c.dim, `Log:   ${ctx.logPath}`)}`);
+  }
+  console.log("");
 }
 
 function runSystemctl(args, fallbackComposeArgs) {
@@ -1275,8 +1337,36 @@ function logsCommand(service, options) {
   runCompose(args, { stdio: "inherit" });
 }
 
+function sipTraceCommand() {
+  ensureInitialized();
+  const compose = detectComposeCommand();
+  const containerName = "bitcall-gateway";
+
+  // Check if sngrep is available in the container
+  const check = run(
+    compose.command,
+    [...compose.prefixArgs, "exec", "-T", containerName, "which", "sngrep"],
+    { cwd: GATEWAY_DIR, check: false, stdio: "pipe" }
+  );
+
+  if (check.status !== 0) {
+    console.error("sngrep is not available in this gateway image.");
+    console.error("Update to the latest image: sudo bitcall-gateway update");
+    process.exit(1);
+  }
+
+  // Run sngrep interactively inside the container
+  const result = run(
+    compose.command,
+    [...compose.prefixArgs, "exec", containerName, "sngrep"],
+    { cwd: GATEWAY_DIR, stdio: "inherit" }
+  );
+
+  process.exit(result.status || 0);
+}
+
 function formatMark(state) {
-  return state ? "✓" : "✗";
+  return state ? clr(_c.green, "✓") : clr(_c.red, "✗");
 }
 
 function statusCommand() {
@@ -1293,6 +1383,7 @@ function statusCommand() {
     "-lc",
     "docker ps --filter name=^bitcall-gateway$ --format '{{.Status}}'",
   ]);
+  const containerUp = Boolean(containerStatus);
 
   const p80 = portInUse(Number.parseInt(envMap.ACME_LISTEN_PORT || "80", 10));
   const p443 = portInUse(Number.parseInt(envMap.WSS_LISTEN_PORT || "443", 10));
@@ -1314,10 +1405,10 @@ function statusCommand() {
 
   const mediaStatus = isMediaIpv4OnlyRulesPresent();
 
-  console.log("Bitcall Gateway Status\n");
+  console.log(`\n${clr(_c.bold + _c.cyan, "  Bitcall Gateway Status")}\n`);
   console.log(`Gateway service: ${formatMark(active)} ${active ? "running" : "stopped"}`);
   console.log(`Auto-start: ${formatMark(enabled)} ${enabled ? "enabled" : "disabled"}`);
-  console.log(`Container: ${containerStatus || "not running"}`);
+  console.log(`Container: ${formatMark(containerUp)} ${containerStatus || "not running"}`);
   console.log("");
   console.log(`Port ${envMap.ACME_LISTEN_PORT || "80"}: ${formatMark(p80.inUse)} listening`);
   console.log(`Port ${envMap.WSS_LISTEN_PORT || "443"}: ${formatMark(p443.inUse)} listening`);
@@ -1432,19 +1523,18 @@ function updateCommand() {
   const targetImage = DEFAULT_GATEWAY_IMAGE;
 
   if (currentImage === targetImage) {
-    console.log(`Image is current: ${targetImage}`);
+    console.log(`${clr(_c.green, "✓")} Image is current: ${clr(_c.dim, targetImage)}`);
     console.log("Checking for newer image layers...");
   } else {
-    console.log(`Updating image: ${currentImage || "(none)"} → ${targetImage}`);
+    console.log(`${clr(_c.yellow, "→")} Updating: ${clr(_c.dim, currentImage || "(none)")} → ${clr(_c.bold, targetImage)}`);
     updateGatewayEnv({ BITCALL_GATEWAY_IMAGE: targetImage });
   }
 
   runCompose(["pull"], { stdio: "inherit" });
   runSystemctl(["reload", SERVICE_NAME], ["up", "-d", "--remove-orphans"]);
 
-  console.log(`\nGateway updated to ${PACKAGE_VERSION}.`);
-  console.log("To update the CLI itself:");
-  console.log("  sudo npm i -g @bitcall/webrtc-sip-gateway@latest");
+  console.log(`\n${clr(_c.green, "✓")} Gateway updated to ${clr(_c.bold, PACKAGE_VERSION)}.`);
+  console.log(clr(_c.dim, "  To update the CLI: sudo npm i -g @bitcall/webrtc-sip-gateway@latest"));
 }
 
 function mediaStatusCommand() {
@@ -1553,12 +1643,12 @@ async function uninstallCommand(options) {
     fs.rmSync(GATEWAY_DIR, { recursive: true, force: true });
   }
 
-  console.log("Gateway uninstalled.");
+  console.log(`\n${clr(_c.green, "✓")} ${clr(_c.bold, "Gateway uninstalled.")}`);
   const domain = uninstallEnv.DOMAIN || "";
-  console.log("\nTo remove the CLI:");
+  console.log(`\n${clr(_c.dim, "To remove the CLI:")}`);
   console.log("  sudo npm uninstall -g @bitcall/webrtc-sip-gateway");
   if (domain && uninstallEnv.TLS_MODE === "letsencrypt") {
-    console.log("\nTo remove Let's Encrypt certificate:");
+    console.log(`\n${clr(_c.dim, "To remove Let's Encrypt certificate:")}`);
     console.log(`  sudo certbot delete --cert-name ${domain}`);
   }
 }
@@ -1574,6 +1664,7 @@ function configCommand() {
 }
 
 function buildProgram() {
+  const { Command } = require("commander");
   const program = new Command();
 
   program
@@ -1604,6 +1695,10 @@ function buildProgram() {
     .option("--no-follow", "Print and exit")
     .option("--tail <lines>", "Number of lines", "200")
     .action(logsCommand);
+  program
+    .command("sip-trace")
+    .description("Live SIP message viewer (sngrep)")
+    .action(sipTraceCommand);
 
   const cert = program.command("cert").description("Certificate operations");
   cert.command("status").description("Show current certificate info").action(certStatusCommand);

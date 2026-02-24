@@ -8,6 +8,7 @@ Latest updates:
 - `update` now syncs `BITCALL_GATEWAY_IMAGE` to the CLI target image tag
   before pulling and restarting.
 - Docker image includes `sngrep` and `tcpdump` for SIP troubleshooting.
+- `sip-trace` opens a live SIP message viewer using `sngrep` in the container.
 
 ## Install
 
@@ -57,6 +58,7 @@ console output concise and writes command details to
 - `sudo bitcall-gateway reconfigure`
 - `sudo bitcall-gateway status`
 - `sudo bitcall-gateway logs [-f] [service]`
+- `sudo bitcall-gateway sip-trace`
 - `sudo bitcall-gateway cert status`
 - `sudo bitcall-gateway cert renew`
 - `sudo bitcall-gateway cert install --cert /path/cert.pem --key /path/key.pem`

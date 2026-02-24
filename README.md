@@ -15,6 +15,7 @@ Bitcall WebRTC-to-SIP gateway repository.
 - `init` and `reconfigure` now stop the current stack before preflight checks
   to avoid false port-conflict failures on `:5060`.
 - Docker image includes `sngrep` and `tcpdump` for SIP diagnostics.
+- CLI includes `bitcall-gateway sip-trace` for live SIP tracing via `sngrep`.
 
 ## End-user install (VPS)
 
@@ -49,6 +50,7 @@ After setup, manage with:
 ```bash
 sudo bitcall-gateway status
 sudo bitcall-gateway logs -f
+sudo bitcall-gateway sip-trace
 sudo bitcall-gateway restart
 sudo bitcall-gateway pause
 sudo bitcall-gateway resume
