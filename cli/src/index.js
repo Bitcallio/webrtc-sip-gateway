@@ -40,7 +40,7 @@ const {
   isMediaIpv4OnlyRulesPresent,
 } = require("../lib/firewall");
 
-const PACKAGE_VERSION = "0.2.5";
+const PACKAGE_VERSION = "0.2.6";
 
 function detectComposeCommand() {
   if (run("docker", ["compose", "version"], { check: false }).status === 0) {
