@@ -14,12 +14,13 @@ sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.5
 sudo bitcall-gateway init
 sudo bitcall-gateway status
 sudo bitcall-gateway logs -f
+sudo bitcall-gateway media status
 ```
 
-Default media policy is IPv4-only (`MEDIA_IPV6=0` and `MEDIA_FORCE_IPV4=1`),
-including IPv6 candidate stripping on SIP->WebRTC SDP. Set `MEDIA_IPV6=1`
-and `MEDIA_FORCE_IPV4=0` in `/opt/bitcall-gateway/.env` only if you want
-IPv6 candidates.
+Default media policy is IPv4-only via IPv6 media firewall drops on RTP/TURN
+ports only. Host IPv6 remains enabled for signaling and non-media traffic.
+Backend selection prefers nftables on non-UFW hosts and uses ip6tables when UFW
+is active.
 
 ## Commands
 
@@ -33,6 +34,9 @@ IPv6 candidates.
 - `sudo bitcall-gateway cert renew`
 - `sudo bitcall-gateway cert install --cert /path/cert.pem --key /path/key.pem`
 - `sudo bitcall-gateway update`
+- `sudo bitcall-gateway media status`
+- `sudo bitcall-gateway media ipv4-only on`
+- `sudo bitcall-gateway media ipv4-only off`
 - `sudo bitcall-gateway uninstall`
 
 ## Files created by init

@@ -18,11 +18,11 @@ sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.5
 sudo bitcall-gateway init
 ```
 
-By default, gateway media candidates are IPv4-only (`MEDIA_IPV6=0` and
-`MEDIA_FORCE_IPV4=1`). The gateway strips IPv6 candidates from SIP->WebRTC SDP
-in this mode to avoid IPv6 ICE path failures on mixed/consumer networks. Set
-`MEDIA_IPV6=1` (and optionally `MEDIA_FORCE_IPV4=0`) in
-`/opt/bitcall-gateway/.env` to enable IPv6 candidates if your network supports them.
+Default production media behavior keeps host IPv6 enabled but blocks IPv6 traffic
+for media ports only (RTP/TURN) using nftables or ip6tables rules with marker:
+`bitcall-gateway media ipv6 block`.
+Backend selection: prefer `nftables` on non-UFW hosts; use `ip6tables` when UFW
+is active to avoid ruleset conflicts.
 
 After setup, manage with:
 
@@ -30,6 +30,9 @@ After setup, manage with:
 sudo bitcall-gateway status
 sudo bitcall-gateway logs -f
 sudo bitcall-gateway restart
+sudo bitcall-gateway media status
+sudo bitcall-gateway media ipv4-only on
+sudo bitcall-gateway media ipv4-only off
 ```
 
 ## Developer quickstart
@@ -81,6 +84,12 @@ sudo systemctl is-enabled bitcall-gateway
 
 Docker image publish is automated on git tag push (`v*`) via `.github/workflows/publish-image.yml`.
 NPM package publish is automated on git tag push (`v*`) via `.github/workflows/publish-npm.yml`.
+
+Before creating a tag:
+1. Test on a fresh VPS with `bitcall-gateway init`.
+2. Confirm `bitcall-gateway status` shows `Media IPv4-only: enabled`.
+3. Confirm IPv6 media drop rules exist (`nft list ruleset` or `ip6tables-save`).
+4. Place a real call and verify audio both directions.
 
 ```bash
 # 1) bump cli/package.json version
