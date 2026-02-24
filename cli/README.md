@@ -3,18 +3,26 @@
 Linux-only CLI to install and operate the Bitcall WebRTC-to-SIP gateway.
 
 Latest updates:
+- Gateway container now renders Kamailio `#!substdef` defaults from `.env` at
+  startup, so advertise/origin/SIP transport values are runtime-accurate.
 - `init` and `reconfigure` stop an existing stack before preflight checks so
   the gateway's own `:5060` listener does not trigger false port conflicts.
 - `update` now syncs `BITCALL_GATEWAY_IMAGE` to the CLI target image tag
   before pulling and restarting.
 - Docker image includes `sngrep` and `tcpdump` for SIP troubleshooting.
 - `sip-trace` opens a live SIP message viewer using `sngrep` in the container.
+- `TURN_MODE=coturn` now generates a compose stack with a dedicated coturn
+  container.
 
 ## Install
 
 ```bash
 sudo npm i -g @bitcall/webrtc-sip-gateway
 ```
+
+Host requirement:
+- Use Docker Engine with `docker compose` plugin.
+- Snap `docker-compose` is not supported (cannot access `/opt/bitcall-gateway`).
 
 ## Main workflow
 

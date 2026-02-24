@@ -1,4 +1,9 @@
 #!/command/with-contenv sh
 set -eu
 
-/usr/sbin/kamailio -c -f /etc/kamailio/kamailio.cfg
+CFG="/run/kamailio/kamailio.cfg"
+if [ ! -f "$CFG" ]; then
+  CFG="/etc/kamailio/kamailio.cfg"
+fi
+
+/usr/sbin/kamailio -c -f "$CFG"

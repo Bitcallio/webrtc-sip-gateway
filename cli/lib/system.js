@@ -129,8 +129,17 @@ function portInUse(port) {
 function ensureDockerInstalled(options = {}) {
   const exec = pickExec(options);
   const shell = pickShell(options);
+  const dockerPath = commandExists("docker")
+    ? output("sh", ["-lc", "command -v docker || true"]).trim()
+    : "";
 
   if (commandExists("docker") && run("docker", ["info"], { check: false }).status === 0) {
+    if (dockerPath.startsWith("/snap/")) {
+      throw new Error(
+        "Detected Docker installed via snap. This setup is not supported for Bitcall gateway. " +
+          "Install Docker Engine (docker-ce) with compose plugin (`docker compose`) and retry."
+      );
+    }
     return;
   }
 
@@ -144,13 +153,45 @@ function ensureDockerInstalled(options = {}) {
 
 function ensureComposePlugin(options = {}) {
   const exec = pickExec(options);
+  const dockerComposePath = commandExists("docker-compose")
+    ? output("sh", ["-lc", "command -v docker-compose || true"]).trim()
+    : "";
+  const snapDockerCompose = dockerComposePath.startsWith("/snap/");
 
   if (run("docker", ["compose", "version"], { check: false }).status === 0) {
     return;
   }
 
-  exec("apt-get", ["update"]);
-  exec("apt-get", ["install", "-y", "docker-compose-plugin"]);
+  if (commandExists("docker-compose") && run("docker-compose", ["version"], { check: false }).status === 0) {
+    if (snapDockerCompose) {
+      try {
+        exec("apt-get", ["update"]);
+        exec("apt-get", ["install", "-y", "docker-compose-plugin"]);
+      } catch (_error) {
+        // Fall through to explicit compatibility error below.
+      }
+
+      if (run("docker", ["compose", "version"], { check: false }).status === 0) {
+        return;
+      }
+
+      throw new Error(
+        "Detected snap docker-compose only. It cannot access /opt/bitcall-gateway due snap confinement. " +
+          "Install Docker's compose plugin (`docker compose`) and retry."
+      );
+    }
+    return;
+  }
+
+  try {
+    exec("apt-get", ["update"]);
+    exec("apt-get", ["install", "-y", "docker-compose-plugin"]);
+  } catch (error) {
+    if (commandExists("docker-compose") && run("docker-compose", ["version"], { check: false }).status === 0) {
+      return;
+    }
+    throw error;
+  }
 }
 
 module.exports = {

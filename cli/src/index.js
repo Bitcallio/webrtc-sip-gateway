@@ -185,6 +185,13 @@ function detectComposeCommand(exec = run) {
     return { command: "docker", prefixArgs: ["compose"] };
   }
   if (exec("docker-compose", ["version"], { check: false }).status === 0) {
+    const composePath = output("sh", ["-lc", "command -v docker-compose || true"]).trim();
+    if (composePath.startsWith("/snap/")) {
+      throw new Error(
+        "Detected snap docker-compose only. Install Docker compose plugin (`docker compose`) " +
+          "because snap docker-compose cannot access /opt/bitcall-gateway."
+      );
+    }
     return { command: "docker-compose", prefixArgs: [] };
   }
   throw new Error("docker compose not found. Install Docker compose plugin.");
@@ -192,7 +199,7 @@ function detectComposeCommand(exec = run) {
 
 function runCompose(args, options = {}, exec = run) {
   const compose = detectComposeCommand(exec);
-  return exec(compose.command, [...compose.prefixArgs, ...args], {
+  return exec(compose.command, [...compose.prefixArgs, "-f", COMPOSE_PATH, ...args], {
     cwd: GATEWAY_DIR,
     ...options,
   });
@@ -995,9 +1002,13 @@ function renderEnvContent(config, tlsCert, tlsKey) {
   return content + extra;
 }
 
-function writeComposeTemplate() {
-  const compose = readTemplate("docker-compose.yml.template");
-  writeFileWithMode(COMPOSE_PATH, compose, 0o644);
+function writeComposeTemplate(config = {}) {
+  let compose = readTemplate("docker-compose.yml.template").trimEnd();
+  if (config.turnMode === "coturn") {
+    const coturn = readTemplate("coturn-service.yml.template").trimEnd();
+    compose = `${compose}\n\n${coturn}`;
+  }
+  writeFileWithMode(COMPOSE_PATH, `${compose}\n`, 0o644);
 }
 
 function provisionCustomCert(config) {
@@ -1056,12 +1067,40 @@ function installGatewayService(exec = run) {
   exec("systemctl", ["enable", "--now", SERVICE_NAME]);
 }
 
+function backupExistingGatewayConfig() {
+  if (!fs.existsSync(ENV_PATH) || !fs.existsSync(COMPOSE_PATH)) {
+    return null;
+  }
+  return {
+    envContent: fs.readFileSync(ENV_PATH, "utf8"),
+    composeContent: fs.readFileSync(COMPOSE_PATH, "utf8"),
+  };
+}
+
+function restoreGatewayConfigFromBackup(backup, contextLabel = "Operation") {
+  if (!backup || backup.envContent == null || backup.composeContent == null) {
+    return;
+  }
+  try {
+    ensureInstallLayout();
+    writeFileWithMode(ENV_PATH, backup.envContent, 0o600);
+    writeFileWithMode(COMPOSE_PATH, backup.composeContent, 0o644);
+    runCompose(["up", "-d", "--remove-orphans"], { check: false, stdio: "pipe" });
+    console.error(`${contextLabel} failed. Restored previous gateway config and attempted restart.`);
+  } catch (restoreError) {
+    console.error(
+      `${contextLabel} failed and automatic restore also failed: ${restoreError.message}`
+    );
+  }
+}
+
 async function initCommand(initOptions = {}) {
   printBanner();
+  const previousConfig = backupExistingGatewayConfig();
 
   // If re-running init on an existing installation, stop the current
   // gateway so our own ports don't fail the preflight check.
-  if (fs.existsSync(ENV_PATH) && fs.existsSync(COMPOSE_PATH)) {
+  if (previousConfig) {
     console.log("Existing gateway detected. Stopping for re-initialization...\n");
     try {
       runCompose(["down"], { stdio: "pipe" });
@@ -1071,111 +1110,131 @@ async function initCommand(initOptions = {}) {
   }
 
   const ctx = createInstallContext(initOptions);
+  try {
+    let preflight;
+    await ctx.step("Checks", async () => {
+      preflight = await runPreflight(ctx);
+    });
 
-  let preflight;
-  await ctx.step("Checks", async () => {
-    preflight = await runPreflight(ctx);
-  });
+    let existingEnv = {};
+    if (fs.existsSync(ENV_PATH)) {
+      existingEnv = loadEnvFile(ENV_PATH);
+    }
 
-  let existingEnv = {};
-  if (fs.existsSync(ENV_PATH)) {
-    existingEnv = loadEnvFile(ENV_PATH);
-  }
+    let config;
+    await ctx.step("Config", async () => {
+      config = await runWizard(existingEnv, preflight, initOptions);
+    });
 
-  let config;
-  await ctx.step("Config", async () => {
-    config = await runWizard(existingEnv, preflight, initOptions);
-  });
+    ensureInstallLayout();
 
-  ensureInstallLayout();
+    let tlsCertPath;
+    let tlsKeyPath;
 
-  let tlsCertPath;
-  let tlsKeyPath;
-
-  await ctx.step("Firewall", async () => {
-    if (config.configureUfw) {
-      const ufwReady = await ensureUfwAvailable(ctx);
-      if (ufwReady) {
-        configureFirewall(config, ctx.exec);
+    await ctx.step("Firewall", async () => {
+      if (config.configureUfw) {
+        const ufwReady = await ensureUfwAvailable(ctx);
+        if (ufwReady) {
+          configureFirewall(config, ctx.exec);
+        } else {
+          console.log("Skipping UFW configuration by request.");
+          config.configureUfw = false;
+          printRequiredPorts(config);
+        }
       } else {
-        console.log("Skipping UFW configuration by request.");
-        config.configureUfw = false;
         printRequiredPorts(config);
       }
-    } else {
-      printRequiredPorts(config);
-    }
 
-    if (config.mediaIpv4Only === "1") {
-      try {
-        const applied = applyMediaIpv4OnlyRules(mediaFirewallOptionsFromConfig(config));
-        console.log(`Applied IPv6 media block rules (${applied.backend}).`);
-      } catch (error) {
-        console.error(`IPv6 media block setup failed: ${error.message}`);
-        const proceed = await confirmContinueWithoutMediaBlock();
-        if (!proceed) {
-          throw new Error("Initialization stopped because media IPv4-only firewall rules were not applied.");
+      if (config.mediaIpv4Only === "1") {
+        try {
+          const applied = applyMediaIpv4OnlyRules(mediaFirewallOptionsFromConfig(config));
+          console.log(`Applied IPv6 media block rules (${applied.backend}).`);
+        } catch (error) {
+          console.error(`IPv6 media block setup failed: ${error.message}`);
+          const proceed = await confirmContinueWithoutMediaBlock();
+          if (!proceed) {
+            throw new Error(
+              "Initialization stopped because media IPv4-only firewall rules were not applied."
+            );
+          }
+          config.mediaIpv4Only = "0";
+          console.log("Continuing without IPv6 media block rules.");
         }
-        config.mediaIpv4Only = "0";
-        console.log("Continuing without IPv6 media block rules.");
       }
+    });
+
+    await ctx.step("TLS", async () => {
+      if (config.tlsMode === "custom") {
+        const custom = provisionCustomCert(config);
+        tlsCertPath = custom.certPath;
+        tlsKeyPath = custom.keyPath;
+      } else if (config.tlsMode === "dev-self-signed") {
+        tlsCertPath = path.join(SSL_DIR, "dev-fullchain.pem");
+        tlsKeyPath = path.join(SSL_DIR, "dev-privkey.pem");
+        generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 30, ctx.exec);
+        console.log("WARNING: Self-signed certificates do not work with browsers.");
+        console.log("WebSocket connections will be rejected. Use --dev for local testing only.");
+        console.log("For browser access, re-run with Let's Encrypt: sudo bitcall-gateway init");
+      } else {
+        tlsCertPath = path.join(SSL_DIR, "bootstrap-fullchain.pem");
+        tlsKeyPath = path.join(SSL_DIR, "bootstrap-privkey.pem");
+        generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 1, ctx.exec);
+      }
+
+      const envContent = renderEnvContent(config, tlsCertPath, tlsKeyPath);
+      writeFileWithMode(ENV_PATH, envContent, 0o600);
+      writeComposeTemplate(config);
+    });
+
+    await ctx.step("Start", async () => {
+      startGatewayStack(ctx.exec);
+      if (config.tlsMode === "letsencrypt") {
+        runLetsEncrypt(config, ctx.exec);
+      }
+      installGatewayService(ctx.exec);
+    });
+
+    await ctx.step("Done", async () => {});
+
+    console.log("");
+    console.log(clr(_c.bold + _c.green, "  ╔══════════════════════════════════════╗"));
+    console.log(
+      clr(_c.bold + _c.green, "  ║") +
+        "  Gateway is " +
+        clr(_c.bold + _c.green, "READY") +
+        "                  " +
+        clr(_c.bold + _c.green, "║")
+    );
+    console.log(clr(_c.bold + _c.green, "  ╚══════════════════════════════════════╝"));
+    console.log("");
+    console.log(`  ${clr(_c.bold, "WSS")}   ${clr(_c.cyan, `wss://${config.domain}`)}`);
+    if (config.turnMode === "coturn") {
+      console.log(`  ${clr(_c.bold, "TURN")}  ${clr(_c.cyan, `https://${config.domain}/turn-credentials`)}`);
+      console.log(`  ${clr(_c.bold, "STUN")}  ${clr(_c.cyan, `stun:${config.domain}:${config.turnUdpPort}`)}`);
+      console.log(`  ${clr(_c.bold, "TURN")}  ${clr(_c.cyan, `turn:${config.domain}:${config.turnUdpPort}`)}`);
+      console.log(
+        `  ${clr(_c.bold, "TURNS")} ${clr(_c.cyan, `turns:${config.domain}:${config.turnsTcpPort}`)}`
+      );
     }
-  });
-
-  await ctx.step("TLS", async () => {
-    if (config.tlsMode === "custom") {
-      const custom = provisionCustomCert(config);
-      tlsCertPath = custom.certPath;
-      tlsKeyPath = custom.keyPath;
-    } else if (config.tlsMode === "dev-self-signed") {
-      tlsCertPath = path.join(SSL_DIR, "dev-fullchain.pem");
-      tlsKeyPath = path.join(SSL_DIR, "dev-privkey.pem");
-      generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 30, ctx.exec);
-      console.log("WARNING: Self-signed certificates do not work with browsers.");
-      console.log("WebSocket connections will be rejected. Use --dev for local testing only.");
-      console.log("For browser access, re-run with Let's Encrypt: sudo bitcall-gateway init");
-    } else {
-      tlsCertPath = path.join(SSL_DIR, "bootstrap-fullchain.pem");
-      tlsKeyPath = path.join(SSL_DIR, "bootstrap-privkey.pem");
-      generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 1, ctx.exec);
+    if (!ctx.verbose) {
+      console.log(`  ${clr(_c.dim, `Log:   ${ctx.logPath}`)}`);
     }
-
-    const envContent = renderEnvContent(config, tlsCertPath, tlsKeyPath);
-    writeFileWithMode(ENV_PATH, envContent, 0o600);
-    writeComposeTemplate();
-  });
-
-  await ctx.step("Start", async () => {
-    startGatewayStack(ctx.exec);
-    if (config.tlsMode === "letsencrypt") {
-      runLetsEncrypt(config, ctx.exec);
+    console.log("");
+  } catch (error) {
+    if (previousConfig) {
+      restoreGatewayConfigFromBackup(previousConfig, "Initialization");
     }
-    installGatewayService(ctx.exec);
-  });
-
-  await ctx.step("Done", async () => {});
-
-  console.log("");
-  console.log(clr(_c.bold + _c.green, "  ╔══════════════════════════════════════╗"));
-  console.log(clr(_c.bold + _c.green, "  ║") + "  Gateway is " + clr(_c.bold + _c.green, "READY") + "                  " + clr(_c.bold + _c.green, "║"));
-  console.log(clr(_c.bold + _c.green, "  ╚══════════════════════════════════════╝"));
-  console.log("");
-  console.log(`  ${clr(_c.bold, "WSS")}   ${clr(_c.cyan, `wss://${config.domain}`)}`);
-  if (config.turnMode !== "none") {
-    console.log(`  ${clr(_c.bold, "TURN")}  ${clr(_c.cyan, `https://${config.domain}/turn-credentials`)}`);
+    throw error;
   }
-  if (!ctx.verbose) {
-    console.log(`  ${clr(_c.dim, `Log:   ${ctx.logPath}`)}`);
-  }
-  console.log("");
 }
 
 async function reconfigureCommand(options) {
   ensureInitialized();
   printBanner();
+  const previousConfig = backupExistingGatewayConfig();
 
   // Stop the running gateway so ports are free for preflight.
-  if (fs.existsSync(ENV_PATH) && fs.existsSync(COMPOSE_PATH)) {
+  if (previousConfig) {
     console.log("Stopping current gateway for reconfiguration...\n");
     try {
       runCompose(["down"], { stdio: "pipe" });
@@ -1185,97 +1244,123 @@ async function reconfigureCommand(options) {
   }
 
   const ctx = createInstallContext(options);
+  try {
+    let preflight;
+    await ctx.step("Checks", async () => {
+      preflight = await runPreflight(ctx);
+    });
 
-  let preflight;
-  await ctx.step("Checks", async () => {
-    preflight = await runPreflight(ctx);
-  });
+    const existingEnv = fs.existsSync(ENV_PATH) ? loadEnvFile(ENV_PATH) : {};
 
-  const existingEnv = fs.existsSync(ENV_PATH) ? loadEnvFile(ENV_PATH) : {};
+    let config;
+    await ctx.step("Config", async () => {
+      config = await runWizard(existingEnv, preflight, options);
+    });
 
-  let config;
-  await ctx.step("Config", async () => {
-    config = await runWizard(existingEnv, preflight, options);
-  });
+    ensureInstallLayout();
 
-  ensureInstallLayout();
+    let tlsCertPath;
+    let tlsKeyPath;
 
-  let tlsCertPath;
-  let tlsKeyPath;
-
-  await ctx.step("Firewall", async () => {
-    if (config.configureUfw) {
-      const ufwReady = await ensureUfwAvailable(ctx);
-      if (ufwReady) {
-        configureFirewall(config, ctx.exec);
+    await ctx.step("Firewall", async () => {
+      if (config.configureUfw) {
+        const ufwReady = await ensureUfwAvailable(ctx);
+        if (ufwReady) {
+          configureFirewall(config, ctx.exec);
+        } else {
+          config.configureUfw = false;
+          printRequiredPorts(config);
+        }
       } else {
-        config.configureUfw = false;
         printRequiredPorts(config);
       }
-    } else {
-      printRequiredPorts(config);
-    }
 
-    if (config.mediaIpv4Only === "1") {
-      try {
-        const applied = applyMediaIpv4OnlyRules(mediaFirewallOptionsFromConfig(config));
-        console.log(`Applied IPv6 media block rules (${applied.backend}).`);
-      } catch (error) {
-        console.error(`IPv6 media block setup failed: ${error.message}`);
-        config.mediaIpv4Only = "0";
+      if (config.mediaIpv4Only === "1") {
+        try {
+          const applied = applyMediaIpv4OnlyRules(mediaFirewallOptionsFromConfig(config));
+          console.log(`Applied IPv6 media block rules (${applied.backend}).`);
+        } catch (error) {
+          console.error(`IPv6 media block setup failed: ${error.message}`);
+          config.mediaIpv4Only = "0";
+        }
       }
-    }
-  });
+    });
 
-  await ctx.step("TLS", async () => {
-    if (config.tlsMode === "custom") {
-      const custom = provisionCustomCert(config);
-      tlsCertPath = custom.certPath;
-      tlsKeyPath = custom.keyPath;
-    } else if (config.tlsMode === "dev-self-signed") {
-      tlsCertPath = path.join(SSL_DIR, "dev-fullchain.pem");
-      tlsKeyPath = path.join(SSL_DIR, "dev-privkey.pem");
-      generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 30, ctx.exec);
-    } else {
-      // Keep existing LE cert if domain matches, otherwise re-provision.
-      const envMap = loadEnvFile(ENV_PATH);
-      if (envMap.TLS_MODE === "letsencrypt" && envMap.TLS_CERT && fs.existsSync(envMap.TLS_CERT)) {
-        tlsCertPath = envMap.TLS_CERT;
-        tlsKeyPath = envMap.TLS_KEY;
+    await ctx.step("TLS", async () => {
+      if (config.tlsMode === "custom") {
+        const custom = provisionCustomCert(config);
+        tlsCertPath = custom.certPath;
+        tlsKeyPath = custom.keyPath;
+      } else if (config.tlsMode === "dev-self-signed") {
+        tlsCertPath = path.join(SSL_DIR, "dev-fullchain.pem");
+        tlsKeyPath = path.join(SSL_DIR, "dev-privkey.pem");
+        generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 30, ctx.exec);
       } else {
-        tlsCertPath = path.join(SSL_DIR, "bootstrap-fullchain.pem");
-        tlsKeyPath = path.join(SSL_DIR, "bootstrap-privkey.pem");
-        generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 1, ctx.exec);
+        // Keep existing LE cert only when domain is unchanged and cert files still exist.
+        const envMap = loadEnvFile(ENV_PATH);
+        const sameDomain =
+          (envMap.DOMAIN || "").trim().toLowerCase() === (config.domain || "").trim().toLowerCase();
+        if (
+          envMap.TLS_MODE === "letsencrypt" &&
+          sameDomain &&
+          envMap.TLS_CERT &&
+          envMap.TLS_KEY &&
+          fs.existsSync(envMap.TLS_CERT) &&
+          fs.existsSync(envMap.TLS_KEY)
+        ) {
+          tlsCertPath = envMap.TLS_CERT;
+          tlsKeyPath = envMap.TLS_KEY;
+        } else {
+          tlsCertPath = path.join(SSL_DIR, "bootstrap-fullchain.pem");
+          tlsKeyPath = path.join(SSL_DIR, "bootstrap-privkey.pem");
+          generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 1, ctx.exec);
+        }
       }
+
+      const envContent = renderEnvContent(config, tlsCertPath, tlsKeyPath);
+      writeFileWithMode(ENV_PATH, envContent, 0o600);
+      writeComposeTemplate(config);
+    });
+
+    await ctx.step("Start", async () => {
+      startGatewayStack(ctx.exec);
+      if (config.tlsMode === "letsencrypt" && (!tlsCertPath || !tlsCertPath.includes("letsencrypt"))) {
+        runLetsEncrypt(config, ctx.exec);
+      }
+    });
+
+    await ctx.step("Done", async () => {});
+
+    console.log("");
+    console.log(clr(_c.bold + _c.green, "  ╔══════════════════════════════════════╗"));
+    console.log(
+      clr(_c.bold + _c.green, "  ║") +
+        "  Gateway is " +
+        clr(_c.bold + _c.green, "READY") +
+        "                  " +
+        clr(_c.bold + _c.green, "║")
+    );
+    console.log(clr(_c.bold + _c.green, "  ╚══════════════════════════════════════╝"));
+    console.log("");
+    console.log(`  ${clr(_c.bold, "WSS")}   ${clr(_c.cyan, `wss://${config.domain}`)}`);
+    if (config.turnMode === "coturn") {
+      console.log(`  ${clr(_c.bold, "TURN")}  ${clr(_c.cyan, `https://${config.domain}/turn-credentials`)}`);
+      console.log(`  ${clr(_c.bold, "STUN")}  ${clr(_c.cyan, `stun:${config.domain}:${config.turnUdpPort}`)}`);
+      console.log(`  ${clr(_c.bold, "TURN")}  ${clr(_c.cyan, `turn:${config.domain}:${config.turnUdpPort}`)}`);
+      console.log(
+        `  ${clr(_c.bold, "TURNS")} ${clr(_c.cyan, `turns:${config.domain}:${config.turnsTcpPort}`)}`
+      );
     }
-
-    const envContent = renderEnvContent(config, tlsCertPath, tlsKeyPath);
-    writeFileWithMode(ENV_PATH, envContent, 0o600);
-    writeComposeTemplate();
-  });
-
-  await ctx.step("Start", async () => {
-    startGatewayStack(ctx.exec);
-    if (config.tlsMode === "letsencrypt" && (!tlsCertPath || !tlsCertPath.includes("letsencrypt"))) {
-      runLetsEncrypt(config, ctx.exec);
+    if (!ctx.verbose) {
+      console.log(`  ${clr(_c.dim, `Log:   ${ctx.logPath}`)}`);
     }
-  });
-
-  await ctx.step("Done", async () => {});
-
-  console.log("");
-  console.log(clr(_c.bold + _c.green, "  ╔══════════════════════════════════════╗"));
-  console.log(clr(_c.bold + _c.green, "  ║") + "  Gateway is " + clr(_c.bold + _c.green, "READY") + "                  " + clr(_c.bold + _c.green, "║"));
-  console.log(clr(_c.bold + _c.green, "  ╚══════════════════════════════════════╝"));
-  console.log("");
-  console.log(`  ${clr(_c.bold, "WSS")}   ${clr(_c.cyan, `wss://${config.domain}`)}`);
-  if (config.turnMode !== "none") {
-    console.log(`  ${clr(_c.bold, "TURN")}  ${clr(_c.cyan, `https://${config.domain}/turn-credentials`)}`);
+    console.log("");
+  } catch (error) {
+    if (previousConfig) {
+      restoreGatewayConfigFromBackup(previousConfig, "Reconfigure");
+    }
+    throw error;
   }
-  if (!ctx.verbose) {
-    console.log(`  ${clr(_c.dim, `Log:   ${ctx.logPath}`)}`);
-  }
-  console.log("");
 }
 
 function runSystemctl(args, fallbackComposeArgs) {
@@ -1384,6 +1469,11 @@ function statusCommand() {
     "docker ps --filter name=^bitcall-gateway$ --format '{{.Status}}'",
   ]);
   const containerUp = Boolean(containerStatus);
+  const coturnStatus = output("sh", [
+    "-lc",
+    "docker ps --filter name=^bitcall-coturn$ --format '{{.Status}}'",
+  ]);
+  const coturnUp = Boolean(coturnStatus);
 
   const p80 = portInUse(Number.parseInt(envMap.ACME_LISTEN_PORT || "80", 10));
   const p443 = portInUse(Number.parseInt(envMap.WSS_LISTEN_PORT || "443", 10));
@@ -1409,6 +1499,9 @@ function statusCommand() {
   console.log(`Gateway service: ${formatMark(active)} ${active ? "running" : "stopped"}`);
   console.log(`Auto-start: ${formatMark(enabled)} ${enabled ? "enabled" : "disabled"}`);
   console.log(`Container: ${formatMark(containerUp)} ${containerStatus || "not running"}`);
+  if (envMap.TURN_MODE === "coturn") {
+    console.log(`Coturn container: ${formatMark(coturnUp)} ${coturnStatus || "not running"}`);
+  }
   console.log("");
   console.log(`Port ${envMap.ACME_LISTEN_PORT || "80"}: ${formatMark(p80.inUse)} listening`);
   console.log(`Port ${envMap.WSS_LISTEN_PORT || "443"}: ${formatMark(p443.inUse)} listening`);

@@ -1,0 +1,39 @@
+  coturn:
+    image: coturn/coturn:latest
+    container_name: bitcall-coturn
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${TLS_CERT}:/etc/ssl/cert.pem:ro
+      - ${TLS_KEY}:/etc/ssl/key.pem:ro
+    command: >
+      -n
+      --realm=${DOMAIN}
+      --external-ip=${PUBLIC_IP}
+      --listening-port=${TURN_UDP_PORT:-3478}
+      --tls-listening-port=${TURNS_TCP_PORT:-5349}
+      --cert=/etc/ssl/cert.pem
+      --pkey=/etc/ssl/key.pem
+      --use-auth-secret
+      --static-auth-secret=${TURN_SECRET}
+      --min-port=${TURN_RELAY_MIN_PORT:-49152}
+      --max-port=${TURN_RELAY_MAX_PORT:-49252}
+      --no-cli
+      --denied-peer-ip=0.0.0.0-0.255.255.255
+      --denied-peer-ip=10.0.0.0-10.255.255.255
+      --denied-peer-ip=127.0.0.0-127.255.255.255
+      --denied-peer-ip=172.16.0.0-172.31.255.255
+      --denied-peer-ip=192.168.0.0-192.168.255.255
+      --channel-lifetime=600
+      --permission-lifetime=300
+      --stale-nonce=600
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -11,6 +11,7 @@ function expectExists(target) {
   const templateDir = path.resolve(__dirname, "../templates");
   expectExists(path.join(templateDir, ".env.template"));
   expectExists(path.join(templateDir, "docker-compose.yml.template"));
+  expectExists(path.join(templateDir, "coturn-service.yml.template"));
 
   expectExists(path.resolve(__dirname, "../bin/bitcall-gateway.js"));
   expectExists(path.resolve(__dirname, "../src/index.js"));

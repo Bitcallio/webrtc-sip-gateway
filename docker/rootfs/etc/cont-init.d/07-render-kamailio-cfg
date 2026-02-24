@@ -1,0 +1,36 @@
+#!/command/with-contenv sh
+set -eu
+
+# Copy config to writable tmpfs. Container rootfs is read-only.
+mkdir -p /run/kamailio
+cp /etc/kamailio/kamailio.cfg /run/kamailio/kamailio.cfg
+cp /etc/kamailio/tls.cfg /run/kamailio/tls.cfg
+
+CFG="/run/kamailio/kamailio.cfg"
+
+patch_substdef() {
+  token="$1"
+  value="$2"
+  awk -v tok="$token" -v val="$value" '
+    $0 ~ "^#!substdef \"!" tok "!" {
+      print "#!substdef \"!" tok "!" val "!g\""
+      next
+    }
+    { print }
+  ' "$CFG" > "${CFG}.tmp"
+  mv "${CFG}.tmp" "$CFG"
+}
+
+escape_substdef_value() {
+  printf '%s' "$1" | sed -e 's/[!$]/\\&/g'
+}
+
+patch_substdef "GATEWAY_DOMAIN" "${DOMAIN:-localhost}"
+patch_substdef "SIP_PORT" "${SIP_UPSTREAM_PORT:-5060}"
+patch_substdef "SIP_UPSTREAM_TRANSPORT" "${SIP_UPSTREAM_TRANSPORT:-udp}"
+patch_substdef "WEBPHONE_ORIGIN" "$(escape_substdef_value "${WEBPHONE_ORIGIN:-*}")"
+patch_substdef "INTERNAL_WSS_PORT" "${INTERNAL_WSS_PORT:-8443}"
+
+sed -i 's|/etc/kamailio/tls.cfg|/run/kamailio/tls.cfg|' "$CFG"
+
+echo "kamailio-cfg: rendered with DOMAIN=${DOMAIN:-localhost}"

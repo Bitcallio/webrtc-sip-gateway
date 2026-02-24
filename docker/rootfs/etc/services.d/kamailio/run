@@ -23,4 +23,9 @@ if [ "$rtp_ready" -eq 1 ]; then
   echo "kamailio: rtpengine ready (cli 7722 + ng 2223)" >&2
 fi
 
-exec /usr/sbin/kamailio -DD -E -f /etc/kamailio/kamailio.cfg -m 64 -M 8
+CFG="/run/kamailio/kamailio.cfg"
+if [ ! -f "$CFG" ]; then
+  CFG="/etc/kamailio/kamailio.cfg"
+fi
+
+exec /usr/sbin/kamailio -DD -E -f "$CFG" -m 64 -M 8

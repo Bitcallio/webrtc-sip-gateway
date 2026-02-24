@@ -107,11 +107,18 @@ function buildNftRuleset(options = {}) {
 }
 
 function persistIp6tables(d) {
+  const aptEnv = {
+    ...process.env,
+    DEBIAN_FRONTEND: "noninteractive",
+    NEEDRESTART_MODE: "a",
+  };
+
   if (!d.commandExists("netfilter-persistent")) {
-    d.run("apt-get", ["update"], { stdio: "inherit" });
+    d.run("apt-get", ["update"], { stdio: "inherit", env: aptEnv });
     d.run("apt-get", ["install", "-y", "netfilter-persistent", "iptables-persistent"], {
       check: false,
       stdio: "inherit",
+      env: aptEnv,
     });
   }
 

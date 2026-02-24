@@ -18,6 +18,8 @@ TURN_CREDENTIALS_PATH = "/turn-credentials"
 DOMAIN = os.environ.get("DOMAIN", "localhost")
 TURN_SECRET = os.environ.get("TURN_SECRET", "")
 TURN_TTL = int(os.environ.get("TURN_TTL", "86400"))
+TURN_UDP_PORT = int(os.environ.get("TURN_UDP_PORT", "3478"))
+TURNS_TCP_PORT = int(os.environ.get("TURNS_TCP_PORT", "5349"))
 ACME_LISTEN_PORT = int(os.environ.get("ACME_LISTEN_PORT", "80"))
 
 
@@ -94,9 +96,9 @@ class TurnCredentialsHandler(http.server.BaseHTTPRequestHandler):
             "credential": credential,
             "ttl": TURN_TTL,
             "uris": [
-                f"turn:{DOMAIN}:3478",
-                f"turn:{DOMAIN}:3478?transport=tcp",
-                f"turns:{DOMAIN}:5349",
+                f"turn:{DOMAIN}:{TURN_UDP_PORT}",
+                f"turn:{DOMAIN}:{TURN_UDP_PORT}?transport=tcp",
+                f"turns:{DOMAIN}:{TURNS_TCP_PORT}",
             ],
         }
         payload = json.dumps(response).encode("utf-8")

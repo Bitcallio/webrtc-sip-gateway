@@ -10,12 +10,15 @@ Bitcall WebRTC-to-SIP gateway repository.
 
 ## Latest behavior updates
 
+- Kamailio config is rendered at container init, so `#!substdef` values use live
+  environment values from `.env` (domain, SIP transport/port, origin allow value).
 - Kamailio listeners now advertise `GATEWAY_DOMAIN` on WSS/SIP sockets, so
   Record-Route, Path, and Via headers use the public domain (not `0.0.0.0`).
 - `init` and `reconfigure` now stop the current stack before preflight checks
   to avoid false port-conflict failures on `:5060`.
 - Docker image includes `sngrep` and `tcpdump` for SIP diagnostics.
 - CLI includes `bitcall-gateway sip-trace` for live SIP tracing via `sngrep`.
+- `TURN_MODE=coturn` now writes a compose stack with a dedicated coturn service.
 
 ## End-user install (VPS)
 
@@ -26,6 +29,10 @@ sudo apt-get install -y nodejs
 sudo npm i -g @bitcall/webrtc-sip-gateway
 sudo bitcall-gateway init
 ```
+
+Host requirement:
+- Install Docker Engine from official apt repos (`docker-ce` + `docker compose` plugin).
+- Snap `docker-compose` is not supported (it cannot access `/opt/bitcall-gateway`).
 
 Default `init` behavior is production profile with universal routing:
 - `BITCALL_ENV=production`
