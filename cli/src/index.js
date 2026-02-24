@@ -1424,15 +1424,22 @@ function logsCommand(service, options) {
 
 function sipTraceCommand() {
   ensureInitialized();
-  const compose = detectComposeCommand();
-  const containerName = "bitcall-gateway";
+  const serviceName = "gateway";
+  const containerNameFallback = "bitcall-gateway";
 
   // Check if sngrep is available in the container
-  const check = run(
-    compose.command,
-    [...compose.prefixArgs, "exec", "-T", containerName, "which", "sngrep"],
-    { cwd: GATEWAY_DIR, check: false, stdio: "pipe" }
+  let check = runCompose(
+    ["exec", "-T", serviceName, "which", "sngrep"],
+    { check: false, stdio: "pipe" }
   );
+
+  // Backward-compatible fallback for stacks where service naming diverged.
+  if (check.status !== 0) {
+    check = run("docker", ["exec", containerNameFallback, "which", "sngrep"], {
+      check: false,
+      stdio: "pipe",
+    });
+  }
 
   if (check.status !== 0) {
     console.error("sngrep is not available in this gateway image.");
@@ -1441,11 +1448,10 @@ function sipTraceCommand() {
   }
 
   // Run sngrep interactively inside the container
-  const result = run(
-    compose.command,
-    [...compose.prefixArgs, "exec", containerName, "sngrep"],
-    { cwd: GATEWAY_DIR, stdio: "inherit" }
-  );
+  const result = runCompose(["exec", serviceName, "sngrep"], {
+    check: false,
+    stdio: "inherit",
+  });
 
   process.exit(result.status || 0);
 }
@@ -1624,7 +1630,8 @@ function updateCommand() {
   }
 
   runCompose(["pull"], { stdio: "inherit" });
-  runSystemctl(["reload", SERVICE_NAME], ["up", "-d", "--remove-orphans"]);
+  runCompose(["up", "-d", "--force-recreate", "--remove-orphans"], { stdio: "inherit" });
+  run("systemctl", ["start", SERVICE_NAME], { check: false, stdio: "ignore" });
 
   console.log(`\n${clr(_c.green, "✓")} Gateway updated to ${clr(_c.bold, PACKAGE_VERSION)}.`);
   console.log(clr(_c.dim, "  To update the CLI: sudo npm i -g @bitcall/webrtc-sip-gateway@latest"));
@@ -1835,7 +1842,16 @@ function buildProgram() {
 
 async function main(argv = process.argv) {
   const program = buildProgram();
-  await program.parseAsync(argv);
+  const normalizedArgv = argv.map((value, index) => {
+    if (index <= 1) {
+      return value;
+    }
+    if (value === "--sip-trace" || value === "-sip-trace") {
+      return "sip-trace";
+    }
+    return value;
+  });
+  await program.parseAsync(normalizedArgv);
 }
 
 module.exports = {

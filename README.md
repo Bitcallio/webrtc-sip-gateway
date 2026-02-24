@@ -17,7 +17,10 @@ Bitcall WebRTC-to-SIP gateway repository.
 - `init` and `reconfigure` now stop the current stack before preflight checks
   to avoid false port-conflict failures on `:5060`.
 - Docker image includes `sngrep` and `tcpdump` for SIP diagnostics.
-- CLI includes `bitcall-gateway sip-trace` for live SIP tracing via `sngrep`.
+- CLI includes `bitcall-gateway sip-trace` for live SIP tracing via `sngrep`
+  (with compatibility handling for legacy `--sip-trace` usage).
+- `bitcall-gateway update` now recreates containers after pull so newly pulled
+  image layers are actually applied to running services.
 - `TURN_MODE=coturn` now writes a compose stack with a dedicated coturn service.
 
 ## End-user install (VPS)

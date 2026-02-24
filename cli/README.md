@@ -7,10 +7,11 @@ Latest updates:
   startup, so advertise/origin/SIP transport values are runtime-accurate.
 - `init` and `reconfigure` stop an existing stack before preflight checks so
   the gateway's own `:5060` listener does not trigger false port conflicts.
-- `update` now syncs `BITCALL_GATEWAY_IMAGE` to the CLI target image tag
-  before pulling and restarting.
+- `update` now syncs `BITCALL_GATEWAY_IMAGE` to the CLI target image tag,
+  pulls, and force-recreates containers so new image layers are applied.
 - Docker image includes `sngrep` and `tcpdump` for SIP troubleshooting.
-- `sip-trace` opens a live SIP message viewer using `sngrep` in the container.
+- `sip-trace` opens a live SIP message viewer using `sngrep` in the container
+  via compose service execution.
 - `TURN_MODE=coturn` now generates a compose stack with a dedicated coturn
   container.
 
