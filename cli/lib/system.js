@@ -3,6 +3,20 @@
 const fs = require("fs");
 const { output, run, runShell, commandExists } = require("./shell");
 
+function pickExec(options = {}) {
+  if (typeof options.exec === "function") {
+    return options.exec;
+  }
+  return (command, args = [], execOptions = {}) => run(command, args, execOptions);
+}
+
+function pickShell(options = {}) {
+  if (typeof options.shell === "function") {
+    return options.shell;
+  }
+  return (script, execOptions = {}) => runShell(script, execOptions);
+}
+
 function parseOsRelease() {
   const info = {};
   const content = fs.readFileSync("/etc/os-release", "utf8");
@@ -112,28 +126,31 @@ function portInUse(port) {
   };
 }
 
-function ensureDockerInstalled() {
+function ensureDockerInstalled(options = {}) {
+  const exec = pickExec(options);
+  const shell = pickShell(options);
+
   if (commandExists("docker") && run("docker", ["info"], { check: false }).status === 0) {
     return;
   }
 
-  run("apt-get", ["update"], { stdio: "inherit" });
-  run("apt-get", ["install", "-y", "curl", "ca-certificates", "gnupg"], {
-    stdio: "inherit",
-  });
-  runShell("curl -fsSL https://get.docker.com | sh", { stdio: "inherit" });
-  run("systemctl", ["enable", "docker.service"], { stdio: "inherit" });
-  run("systemctl", ["enable", "containerd.service"], { stdio: "inherit" });
-  run("systemctl", ["start", "docker"], { stdio: "inherit" });
+  exec("apt-get", ["update"]);
+  exec("apt-get", ["install", "-y", "curl", "ca-certificates", "gnupg"]);
+  shell("curl -fsSL https://get.docker.com | sh");
+  exec("systemctl", ["enable", "docker.service"]);
+  exec("systemctl", ["enable", "containerd.service"]);
+  exec("systemctl", ["start", "docker"]);
 }
 
-function ensureComposePlugin() {
+function ensureComposePlugin(options = {}) {
+  const exec = pickExec(options);
+
   if (run("docker", ["compose", "version"], { check: false }).status === 0) {
     return;
   }
 
-  run("apt-get", ["update"], { stdio: "inherit" });
-  run("apt-get", ["install", "-y", "docker-compose-plugin"], { stdio: "inherit" });
+  exec("apt-get", ["update"]);
+  exec("apt-get", ["install", "-y", "docker-compose-plugin"]);
 }
 
 module.exports = {

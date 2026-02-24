@@ -14,12 +14,18 @@ Bitcall WebRTC-to-SIP gateway repository.
 sudo apt-get update && sudo apt-get install -y curl ca-certificates
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.6
-sudo bitcall-gateway init
+sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.7
+sudo bitcall-gateway init --dev
 ```
 
-Default production media behavior keeps host IPv6 enabled but blocks IPv6 traffic
-for media ports only (RTP/TURN) using nftables or ip6tables rules with marker:
+Default installer behavior is dev-friendly and works with minimal prompts.
+For hardened installs use `sudo bitcall-gateway init --production` (or add
+`--advanced` for full control).
+Use `--verbose` to stream installer command output; default output is concise
+and full command logs are written to `/var/log/bitcall-gateway-install.log`.
+
+Default media behavior keeps host IPv6 enabled but blocks IPv6 traffic for media
+ports only (RTP/TURN) using nftables or ip6tables rules with marker:
 `bitcall-gateway media ipv6 block`.
 Backend selection: prefer `nftables` on non-UFW hosts; use `ip6tables` when UFW
 is active to avoid ruleset conflicts.
@@ -30,6 +36,7 @@ After setup, manage with:
 sudo bitcall-gateway status
 sudo bitcall-gateway logs -f
 sudo bitcall-gateway restart
+sudo bitcall-gateway init --production
 sudo bitcall-gateway media status
 sudo bitcall-gateway media ipv4-only on
 sudo bitcall-gateway media ipv4-only off

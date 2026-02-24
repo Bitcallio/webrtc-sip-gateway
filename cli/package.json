@@ -1,6 +1,6 @@
 {
   "name": "@bitcall/webrtc-sip-gateway",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Linux CLI for bootstrapping and managing the Bitcall WebRTC-to-SIP Gateway",
   "repository": {
     "type": "git",
@@ -22,7 +22,7 @@
   },
   "scripts": {
     "lint": "node --check src/index.js && node --check bin/bitcall-gateway.js && for f in lib/*.js; do node --check \"$f\"; done",
-    "test": "node test/smoke.test.js && node test/firewall.test.js",
+    "test": "node test/smoke.test.js && node test/firewall.test.js && node test/init-config.test.js",
     "pack:dry": "npm pack --dry-run"
   },
   "dependencies": {

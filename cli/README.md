@@ -5,13 +5,13 @@ Linux-only CLI to install and operate the Bitcall WebRTC-to-SIP gateway.
 ## Install
 
 ```bash
-sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.6
+sudo npm i -g @bitcall/webrtc-sip-gateway@0.2.7
 ```
 
 ## Main workflow
 
 ```bash
-sudo bitcall-gateway init
+sudo bitcall-gateway init --dev
 sudo bitcall-gateway status
 sudo bitcall-gateway logs -f
 sudo bitcall-gateway media status
@@ -22,9 +22,19 @@ ports only. Host IPv6 remains enabled for signaling and non-media traffic.
 Backend selection prefers nftables on non-UFW hosts and uses ip6tables when UFW
 is active.
 
+Use `sudo bitcall-gateway init --production` for strict input validation and
+hardening checks.
+Use `--verbose` to stream apt/docker output during install. Default mode keeps
+console output concise and writes command details to
+`/var/log/bitcall-gateway-install.log`.
+
 ## Commands
 
 - `sudo bitcall-gateway init`
+- `sudo bitcall-gateway init --dev`
+- `sudo bitcall-gateway init --production`
+- `sudo bitcall-gateway init --advanced`
+- `sudo bitcall-gateway init --verbose`
 - `sudo bitcall-gateway up`
 - `sudo bitcall-gateway down`
 - `sudo bitcall-gateway restart`

@@ -19,7 +19,7 @@ const {
   RENEW_HOOK_PATH,
 } = require("../lib/constants");
 const { run, runShell, output, commandExists } = require("../lib/shell");
-const { loadEnvFile, parseEnv, writeEnvFile } = require("../lib/envfile");
+const { loadEnvFile, writeEnvFile } = require("../lib/envfile");
 const { Prompter } = require("../lib/prompt");
 const {
   parseOsRelease,
@@ -40,21 +40,109 @@ const {
   isMediaIpv4OnlyRulesPresent,
 } = require("../lib/firewall");
 
-const PACKAGE_VERSION = "0.2.6";
+const PACKAGE_VERSION = "0.2.7";
+const INSTALL_LOG_PATH = "/var/log/bitcall-gateway-install.log";
 
-function detectComposeCommand() {
-  if (run("docker", ["compose", "version"], { check: false }).status === 0) {
+function printBanner() {
+  console.log("========================================");
+  console.log("  BITCALL WEBRTC-SIP GATEWAY INSTALLER");
+  console.log(`  version ${PACKAGE_VERSION}`);
+  console.log("  one-line deploy for browser SIP");
+  console.log("========================================\n");
+}
+
+function createInstallContext(options = {}) {
+  const verbose = Boolean(options.verbose);
+  const steps = ["Checks", "Config", "Firewall", "TLS", "Start", "Done"];
+  const state = { index: 0 };
+
+  if (!verbose) {
+    fs.writeFileSync(INSTALL_LOG_PATH, "", { mode: 0o600 });
+    fs.chmodSync(INSTALL_LOG_PATH, 0o600);
+  }
+
+  function logLine(line) {
+    if (!verbose) {
+      fs.appendFileSync(INSTALL_LOG_PATH, `${line}\n`);
+    }
+  }
+
+  function formatCommand(command, args) {
+    const joined = [command, ...(args || [])].join(" ").trim();
+    return joined;
+  }
+
+  function exec(command, args = [], commandOptions = {}) {
+    const stdio = verbose ? "inherit" : "pipe";
+    const result = run(command, args, {
+      ...commandOptions,
+      check: false,
+      stdio,
+    });
+
+    if (!verbose) {
+      logLine(`$ ${formatCommand(command, args)}`);
+      if (result.stdout) {
+        fs.appendFileSync(INSTALL_LOG_PATH, result.stdout);
+      }
+      if (result.stderr) {
+        fs.appendFileSync(INSTALL_LOG_PATH, result.stderr);
+      }
+      logLine("");
+    }
+
+    if (commandOptions.check !== false && result.status !== 0) {
+      throw new Error(`Command failed: ${formatCommand(command, args)}`);
+    }
+
+    return result;
+  }
+
+  function shell(script, commandOptions = {}) {
+    return exec("sh", ["-lc", script], commandOptions);
+  }
+
+  async function step(label, fn) {
+    state.index += 1;
+    console.log(`[${state.index}/${steps.length}] ${label}...`);
+    const started = Date.now();
+    try {
+      const value = await fn();
+      const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+      console.log(`✓ ${label} (${elapsed}s)\n`);
+      return value;
+    } catch (error) {
+      console.error(`✗ ${label} failed: ${error.message}`);
+      if (!verbose) {
+        console.error(`Install log: ${INSTALL_LOG_PATH}`);
+      }
+      throw error;
+    }
+  }
+
+  return {
+    verbose,
+    logPath: INSTALL_LOG_PATH,
+    exec,
+    shell,
+    step,
+    logLine,
+  };
+}
+
+function detectComposeCommand(exec = run) {
+  if (exec("docker", ["compose", "version"], { check: false }).status === 0) {
     return { command: "docker", prefixArgs: ["compose"] };
   }
-  if (run("docker-compose", ["version"], { check: false }).status === 0) {
+  if (exec("docker-compose", ["version"], { check: false }).status === 0) {
     return { command: "docker-compose", prefixArgs: [] };
   }
   throw new Error("docker compose not found. Install Docker compose plugin.");
 }
 
-function runCompose(args, options = {}) {
-  const compose = detectComposeCommand();
-  return run(compose.command, [...compose.prefixArgs, ...args], {
+function runCompose(args, options = {}, exec = run) {
+  const compose = detectComposeCommand(exec);
+  return exec(compose.command, [...compose.prefixArgs, ...args], {
     cwd: GATEWAY_DIR,
     ...options,
   });
@@ -178,17 +266,13 @@ WantedBy=multi-user.target
 `;
 }
 
-function installSystemdService() {
+function installSystemdService(exec = run) {
   writeFileWithMode(SERVICE_FILE, buildSystemdService(), 0o644);
-  run("systemctl", ["daemon-reload"], { stdio: "inherit" });
-  run("systemctl", ["enable", SERVICE_NAME], { stdio: "inherit" });
+  exec("systemctl", ["daemon-reload"]);
+  exec("systemctl", ["enable", SERVICE_NAME]);
 }
 
-function configureFirewall(config) {
-  if (!commandExists("ufw")) {
-    return;
-  }
-
+function buildUfwRules(config) {
   const rules = [
     ["22/tcp", "SSH"],
     ["80/tcp", "Bitcall ACME"],
@@ -202,15 +286,98 @@ function configureFirewall(config) {
     rules.push(["5061/tcp", "Bitcall SIP TLS"]);
   }
 
-  for (const [port, label] of rules) {
-    run("ufw", ["allow", port, "comment", label], {
+  if (config.turnMode === "coturn") {
+    rules.push([`${config.turnUdpPort}/udp`, "Bitcall TURN UDP"]);
+    rules.push([`${config.turnUdpPort}/tcp`, "Bitcall TURN TCP"]);
+    rules.push([`${config.turnsTcpPort}/tcp`, "Bitcall TURNS TCP"]);
+    rules.push([
+      `${config.turnRelayMinPort}:${config.turnRelayMaxPort}/udp`,
+      "Bitcall TURN relay UDP",
+    ]);
+  }
+
+  return rules;
+}
+
+function printRequiredPorts(config) {
+  console.log("Open these ports in your host/cloud firewall:");
+  for (const [port, label] of buildUfwRules(config)) {
+    console.log(`  - ${port} (${label})`);
+  }
+}
+
+function configureFirewall(config, exec = run) {
+  for (const [port, label] of buildUfwRules(config)) {
+    exec("ufw", ["allow", port, "comment", label], {
       check: false,
-      stdio: "ignore",
     });
   }
 
-  run("ufw", ["--force", "enable"], { check: false, stdio: "ignore" });
-  run("ufw", ["reload"], { check: false, stdio: "ignore" });
+  exec("ufw", ["--force", "enable"], { check: false });
+  exec("ufw", ["reload"], { check: false });
+}
+
+function isSingleProviderConfigured(config) {
+  return config.routingMode === "single-provider" && Boolean((config.sipProviderUri || "").trim());
+}
+
+function isOriginWildcard(originPattern) {
+  const value = (originPattern || "").trim();
+  return value === ".*" || value === "^.*$" || value === "*";
+}
+
+function validateProductionConfig(config) {
+  const hasAllowedDomains = countAllowedDomains(config.allowedDomains) > 0;
+  const hasSingleProvider = isSingleProviderConfigured(config);
+  if (!hasAllowedDomains && !hasSingleProvider) {
+    throw new Error(
+      "Production requires ALLOWED_SIP_DOMAINS or single-provider routing with SIP_PROVIDER_URI. Re-run: bitcall-gateway init --advanced --production"
+    );
+  }
+
+  const originPattern = toOriginPattern(config.webphoneOrigin);
+  const hasStrictOrigin = !isOriginWildcard(originPattern);
+  const hasTurnToken = Boolean((config.turnApiToken || "").trim());
+  if (!hasStrictOrigin && !hasTurnToken) {
+    throw new Error(
+      "Production requires a strict WEBPHONE_ORIGIN_PATTERN or TURN_API_TOKEN. Re-run: bitcall-gateway init --advanced --production"
+    );
+  }
+}
+
+function buildDevWarnings(config) {
+  const warnings = [];
+  if (countAllowedDomains(config.allowedDomains) === 0) {
+    warnings.push("Provider allowlist: any (DEV mode)");
+  }
+  if (isOriginWildcard(toOriginPattern(config.webphoneOrigin))) {
+    warnings.push("Webphone origin: any (DEV mode)");
+  }
+  if (!(config.sipTrustedIps || "").trim()) {
+    warnings.push("Trusted SIP source IPs: any (DEV mode)");
+  }
+  return warnings;
+}
+
+function buildQuickFlowDefaults(initProfile, existing = {}) {
+  const defaults = {
+    bitcallEnv: initProfile,
+    routingMode: "universal",
+    sipProviderUri: "",
+    sipTransport: "udp",
+    sipPort: "5060",
+    allowedDomains: existing.ALLOWED_SIP_DOMAINS || "",
+    webphoneOrigin: existing.WEBPHONE_ORIGIN || DEFAULT_WEBPHONE_ORIGIN,
+    sipTrustedIps: existing.SIP_TRUSTED_IPS || "",
+  };
+
+  if (initProfile === "dev") {
+    defaults.allowedDomains = "";
+    defaults.webphoneOrigin = "*";
+    defaults.sipTrustedIps = "";
+  }
+
+  return defaults;
 }
 
 function countAllowedDomains(raw) {
@@ -259,9 +426,33 @@ async function confirmContinueWithoutMediaBlock() {
   }
 }
 
-function generateSelfSigned(certPath, keyPath, domain, days = 1) {
+async function confirmInstallUfw() {
+  const prompt = new Prompter();
+  try {
+    return await prompt.askYesNo("ufw is not installed. Install ufw now?", true);
+  } finally {
+    prompt.close();
+  }
+}
+
+async function ensureUfwAvailable(ctx) {
+  if (commandExists("ufw")) {
+    return true;
+  }
+
+  const installNow = await confirmInstallUfw();
+  if (!installNow) {
+    return false;
+  }
+
+  ctx.exec("apt-get", ["update"]);
+  ctx.exec("apt-get", ["install", "-y", "ufw"]);
+  return commandExists("ufw");
+}
+
+function generateSelfSigned(certPath, keyPath, domain, days = 1, exec = run) {
   ensureDir(path.dirname(certPath), 0o700);
-  run(
+  exec(
     "openssl",
     [
       "req",
@@ -278,7 +469,7 @@ function generateSelfSigned(certPath, keyPath, domain, days = 1) {
       "-subj",
       `/CN=${domain}`,
     ],
-    { stdio: "inherit" }
+    {}
   );
   fs.chmodSync(certPath, 0o644);
   fs.chmodSync(keyPath, 0o600);
@@ -353,7 +544,20 @@ function toOriginPattern(origin) {
   return `^${escapeRegex(origin)}$`;
 }
 
-async function runPreflight() {
+function normalizeInitProfile(initOptions = {}, existing = {}) {
+  if (initOptions.dev && initOptions.production) {
+    throw new Error("Use only one mode: --dev or --production.");
+  }
+  if (initOptions.production) {
+    return "production";
+  }
+  if (initOptions.dev) {
+    return "dev";
+  }
+  return existing.BITCALL_ENV || "dev";
+}
+
+async function runPreflight(ctx) {
   if (process.platform !== "linux") {
     throw new Error("bitcall-gateway supports Linux hosts only.");
   }
@@ -365,13 +569,11 @@ async function runPreflight() {
     );
   }
 
-  run("apt-get", ["update"], { stdio: "inherit" });
-  run("apt-get", ["install", "-y", "curl", "ca-certificates", "lsof", "openssl", "gnupg"], {
-    stdio: "inherit",
-  });
+  ctx.exec("apt-get", ["update"]);
+  ctx.exec("apt-get", ["install", "-y", "curl", "ca-certificates", "lsof", "openssl", "gnupg"]);
 
-  ensureDockerInstalled();
-  ensureComposePlugin();
+  ensureDockerInstalled({ exec: ctx.exec, shell: ctx.shell });
+  ensureComposePlugin({ exec: ctx.exec });
 
   const freeGb = diskFreeGb("/");
   if (freeGb < 2) {
@@ -392,17 +594,73 @@ async function runPreflight() {
   }
 
   return {
+    os,
     p80,
     p443,
   };
 }
 
-async function runWizard(existing = {}, preflight = {}) {
+function printSummary(config, devWarnings) {
+  const allowedCount = countAllowedDomains(config.allowedDomains);
+  const showDevWarnings = config.bitcallEnv === "dev";
+  console.log("\nSummary:");
+  console.log(`  Domain: ${config.domain}`);
+  console.log(`  Environment: ${config.bitcallEnv}`);
+  console.log(`  Routing: ${config.routingMode}`);
+  console.log(
+    `  Provider allowlist: ${allowedCount > 0 ? config.allowedDomains : "(any)"}${showDevWarnings && allowedCount === 0 ? " [DEV WARNING]" : ""}`
+  );
+  console.log(
+    `  Webphone origin: ${config.webphoneOrigin === "*" ? `(any)${showDevWarnings ? " [DEV WARNING]" : ""}` : config.webphoneOrigin}`
+  );
+  console.log(`  SIP source IPs: ${(config.sipTrustedIps || "").trim() ? config.sipTrustedIps : "(any)"}`);
+  console.log(`  TLS: ${config.tlsMode === "letsencrypt" ? "Let's Encrypt" : config.tlsMode}`);
+  console.log(`  TURN: ${config.turnMode === "coturn" ? "enabled (coturn)" : config.turnMode}`);
+  console.log(
+    `  Media: ${config.mediaIpv4Only === "1" ? "IPv4-only (IPv6 media blocked)" : "dual-stack"}`
+  );
+  console.log(`  Firewall: ${config.configureUfw ? "UFW enabled" : "manual setup"}`);
+
+  if (devWarnings.length > 0) {
+    console.log("\nWarnings:");
+    for (const warning of devWarnings) {
+      console.log(`  - ${warning}`);
+    }
+  }
+}
+
+function parseProviderFromUri(uri = "") {
+  const clean = uri.replace(/^sip:/, "");
+  const [hostPort, transportPart] = clean.split(";");
+  const [host, port] = hostPort.split(":");
+  let transport = "udp";
+  if (transportPart && transportPart.includes("transport=")) {
+    transport = transportPart.split("transport=")[1] || "udp";
+  }
+  return {
+    host: host || DEFAULT_PROVIDER_HOST,
+    port: port || (transport === "tls" ? "5061" : "5060"),
+    transport,
+  };
+}
+
+async function runWizard(existing = {}, preflight = {}, initOptions = {}) {
   const prompt = new Prompter();
 
   try {
+    const initProfile = normalizeInitProfile(initOptions, existing);
+    let advanced = Boolean(initOptions.advanced);
+    if (initOptions.production && !initOptions.advanced) {
+      advanced = true;
+    } else if (!initOptions.dev && !initOptions.production && !initOptions.advanced) {
+      advanced = await prompt.askYesNo("Advanced setup", false);
+    }
+
     const detectedIp = detectPublicIp();
-    const domain = await prompt.askText("Gateway domain", existing.DOMAIN || "", { required: true });
+    const domainDefault = initOptions.domain || existing.DOMAIN || "";
+    const domain = domainDefault
+      ? domainDefault
+      : await prompt.askText("Gateway domain", existing.DOMAIN || "", { required: true });
     let publicIp = existing.PUBLIC_IP || detectedIp || "";
     if (!publicIp) {
       publicIp = await prompt.askText("Public IPv4 (auto-detect failed)", "", { required: true });
@@ -418,22 +676,21 @@ async function runWizard(existing = {}, preflight = {}) {
         ? "reverse-proxy"
         : "standalone";
 
-    const advanced = await prompt.askYesNo("Advanced setup", false);
-
     let deployMode = autoDeployMode;
     let tlsMode = "letsencrypt";
-    let acmeEmail = existing.ACME_EMAIL || "";
+    let acmeEmail = initOptions.email || existing.ACME_EMAIL || "";
     let customCertPath = "";
     let customKeyPath = "";
-    let bitcallEnv = existing.BITCALL_ENV || "production";
+    let bitcallEnv = initProfile;
     let routingMode = existing.ROUTING_MODE || "universal";
-    let sipProviderHost = DEFAULT_PROVIDER_HOST;
-    let sipTransport = "udp";
-    let sipPort = "5060";
+    const providerFromEnv = parseProviderFromUri(existing.SIP_PROVIDER_URI || "");
+    let sipProviderHost = providerFromEnv.host || DEFAULT_PROVIDER_HOST;
+    let sipTransport = providerFromEnv.transport || "udp";
+    let sipPort = providerFromEnv.port || "5060";
     let sipProviderUri = "";
     let allowedDomains = existing.ALLOWED_SIP_DOMAINS || "";
     let sipTrustedIps = existing.SIP_TRUSTED_IPS || "";
-    let turnMode = await prompt.askYesNo("Enable built-in TURN (coturn)?", true) ? "coturn" : "none";
+    let turnMode = "coturn";
     let turnSecret = "";
     let turnTtl = existing.TURN_TTL || "86400";
     let turnApiToken = existing.TURN_API_TOKEN || "";
@@ -441,14 +698,26 @@ async function runWizard(existing = {}, preflight = {}) {
     let turnExternalUsername = "";
     let turnExternalCredential = "";
     let webphoneOrigin = existing.WEBPHONE_ORIGIN || DEFAULT_WEBPHONE_ORIGIN;
-    let configureUfw = true;
+    let configureUfw = initOptions.dev ? true : await prompt.askYesNo("Configure UFW firewall rules now?", true);
     let mediaIpv4Only = existing.MEDIA_IPV4_ONLY ? existing.MEDIA_IPV4_ONLY === "1" : true;
 
-    if (turnMode === "coturn") {
-      turnSecret = crypto.randomBytes(32).toString("hex");
-    }
-
-    if (advanced) {
+    if (!advanced) {
+      acmeEmail = acmeEmail || (await prompt.askText("Let's Encrypt email", "", { required: true }));
+      if (!initOptions.dev) {
+        turnMode = await prompt.askYesNo("Enable built-in TURN (coturn)?", true) ? "coturn" : "none";
+      } else {
+        turnMode = "coturn";
+      }
+      const quickDefaults = buildQuickFlowDefaults(initProfile, existing);
+      bitcallEnv = quickDefaults.bitcallEnv;
+      routingMode = quickDefaults.routingMode;
+      sipProviderUri = quickDefaults.sipProviderUri;
+      sipTransport = quickDefaults.sipTransport;
+      sipPort = quickDefaults.sipPort;
+      allowedDomains = quickDefaults.allowedDomains;
+      webphoneOrigin = quickDefaults.webphoneOrigin;
+      sipTrustedIps = quickDefaults.sipTrustedIps;
+    } else {
       deployMode = await prompt.askChoice(
         "Deployment mode",
         ["standalone", "reverse-proxy"],
@@ -476,9 +745,11 @@ async function runWizard(existing = {}, preflight = {}) {
         acmeEmail = "";
       }
 
-      bitcallEnv = await prompt.askChoice("Environment", ["production", "dev"], bitcallEnv === "dev" ? 1 : 0);
+      if (!initOptions.dev && !initOptions.production) {
+        bitcallEnv = await prompt.askChoice("Environment", ["production", "dev"], bitcallEnv === "dev" ? 1 : 0);
+      }
       allowedDomains = await prompt.askText(
-        "Allowed SIP domains (comma-separated; required in production)",
+        "Allowed SIP domains (comma-separated)",
         allowedDomains
       );
 
@@ -525,7 +796,8 @@ async function runWizard(existing = {}, preflight = {}) {
         sipTrustedIps
       );
 
-      const turnDefaultIndex = turnMode === "external" ? 2 : turnMode === "coturn" ? 1 : 0;
+      const existingTurn = existing.TURN_MODE || "coturn";
+      const turnDefaultIndex = existingTurn === "external" ? 2 : existingTurn === "coturn" ? 1 : 0;
       turnMode = await prompt.askChoice("TURN mode", ["none", "coturn", "external"], turnDefaultIndex);
       if (turnMode === "coturn") {
         turnSecret = crypto.randomBytes(32).toString("hex");
@@ -559,16 +831,10 @@ async function runWizard(existing = {}, preflight = {}) {
         "Media IPv4-only mode (block IPv6 RTP/TURN on host firewall)",
         mediaIpv4Only
       );
-
-      configureUfw = await prompt.askYesNo("Configure ufw firewall rules now", true);
-    } else {
-      acmeEmail = await prompt.askText("Let's Encrypt email", acmeEmail, { required: true });
     }
 
-    if (bitcallEnv === "production" && !allowedDomains.trim()) {
-      throw new Error(
-        "Production mode requires ALLOWED_SIP_DOMAINS. Re-run init with Advanced=Yes and provide allowlisted SIP domains, or switch Environment to dev."
-      );
+    if (turnMode === "coturn") {
+      turnSecret = crypto.randomBytes(32).toString("hex");
     }
 
     if (deployMode === "reverse-proxy") {
@@ -615,23 +881,18 @@ async function runWizard(existing = {}, preflight = {}) {
       configureUfw,
     };
 
-    const allowedCount = countAllowedDomains(config.allowedDomains);
-    console.log("\nSummary:");
-    console.log(`  Domain: ${config.domain}`);
-    console.log(`  Public IP: ${config.publicIp}`);
-    console.log(`  TLS: ${config.tlsMode === "letsencrypt" ? "Let's Encrypt" : config.tlsMode}`);
-    console.log(`  Deploy mode: ${config.deployMode}${advanced ? "" : " (auto)"}`);
-    console.log(`  TURN: ${config.turnMode}`);
-    console.log(
-      `  Media: ${config.mediaIpv4Only === "1" ? "IPv4-only (IPv6 signaling allowed; IPv6 media blocked)" : "dual-stack"}`
-    );
-    console.log(
-      `  Security: Allowed SIP domains ${allowedCount > 0 ? `${allowedCount} entries` : "not set"}`
-    );
+    if (config.bitcallEnv === "production") {
+      validateProductionConfig(config);
+    }
 
-    const proceed = await prompt.askYesNo("Proceed with provisioning", true);
-    if (!proceed) {
-      throw new Error("Initialization canceled.");
+    const devWarnings = config.bitcallEnv === "dev" ? buildDevWarnings(config) : [];
+    printSummary(config, devWarnings);
+
+    if (!(initOptions.dev && !advanced)) {
+      const proceed = await prompt.askYesNo("Proceed with provisioning", true);
+      if (!proceed) {
+        throw new Error("Initialization canceled.");
+      }
     }
 
     return config;
@@ -722,16 +983,16 @@ function provisionCustomCert(config) {
   return { certPath: certOut, keyPath: keyOut };
 }
 
-function startGatewayStack() {
-  runCompose(["pull"], { stdio: "inherit" });
-  runCompose(["up", "-d", "--remove-orphans"], { stdio: "inherit" });
+function startGatewayStack(exec = run) {
+  runCompose(["pull"], {}, exec);
+  runCompose(["up", "-d", "--remove-orphans"], {}, exec);
 }
 
-function runLetsEncrypt(config) {
-  run("apt-get", ["update"], { stdio: "inherit" });
-  run("apt-get", ["install", "-y", "certbot"], { stdio: "inherit" });
+function runLetsEncrypt(config, exec = run) {
+  exec("apt-get", ["update"]);
+  exec("apt-get", ["install", "-y", "certbot"]);
 
-  run(
+  exec(
     "certbot",
     [
       "certonly",
@@ -745,7 +1006,7 @@ function runLetsEncrypt(config) {
       "--agree-tos",
       "--non-interactive",
     ],
-    { stdio: "inherit" }
+    {}
   );
 
   const liveCert = `/etc/letsencrypt/live/${config.domain}/fullchain.pem`;
@@ -757,79 +1018,105 @@ function runLetsEncrypt(config) {
   });
 
   installRenewHook();
-  runCompose(["up", "-d", "--remove-orphans"], { stdio: "inherit" });
+  runCompose(["up", "-d", "--remove-orphans"], {}, exec);
 }
 
-function installGatewayService() {
-  installSystemdService();
-  run("systemctl", ["enable", "--now", SERVICE_NAME], { stdio: "inherit" });
+function installGatewayService(exec = run) {
+  installSystemdService(exec);
+  exec("systemctl", ["enable", "--now", SERVICE_NAME]);
 }
 
-async function initCommand() {
-  const preflight = await runPreflight();
+async function initCommand(initOptions = {}) {
+  printBanner();
+  const ctx = createInstallContext(initOptions);
+
+  let preflight;
+  await ctx.step("Checks", async () => {
+    preflight = await runPreflight(ctx);
+  });
 
   let existingEnv = {};
   if (fs.existsSync(ENV_PATH)) {
     existingEnv = loadEnvFile(ENV_PATH);
   }
 
-  const config = await runWizard(existingEnv, preflight);
+  let config;
+  await ctx.step("Config", async () => {
+    config = await runWizard(existingEnv, preflight, initOptions);
+  });
 
   ensureInstallLayout();
 
   let tlsCertPath;
   let tlsKeyPath;
 
-  if (config.tlsMode === "custom") {
-    const custom = provisionCustomCert(config);
-    tlsCertPath = custom.certPath;
-    tlsKeyPath = custom.keyPath;
-  } else if (config.tlsMode === "dev-self-signed") {
-    tlsCertPath = path.join(SSL_DIR, "dev-fullchain.pem");
-    tlsKeyPath = path.join(SSL_DIR, "dev-privkey.pem");
-    generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 30);
-  } else {
-    tlsCertPath = path.join(SSL_DIR, "bootstrap-fullchain.pem");
-    tlsKeyPath = path.join(SSL_DIR, "bootstrap-privkey.pem");
-    generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 1);
-  }
-
-  const envContent = renderEnvContent(config, tlsCertPath, tlsKeyPath);
-  writeFileWithMode(ENV_PATH, envContent, 0o600);
-  writeComposeTemplate();
-
-  if (config.configureUfw) {
-    configureFirewall(config);
-  }
-
-  if (config.mediaIpv4Only === "1") {
-    try {
-      const applied = applyMediaIpv4OnlyRules(mediaFirewallOptionsFromConfig(config));
-      console.log(`Applied IPv6 media block rules (${applied.backend}).`);
-    } catch (error) {
-      console.error(`IPv6 media block setup failed: ${error.message}`);
-      const proceed = await confirmContinueWithoutMediaBlock();
-      if (!proceed) {
-        throw new Error("Initialization stopped because media IPv4-only firewall rules were not applied.");
+  await ctx.step("Firewall", async () => {
+    if (config.configureUfw) {
+      const ufwReady = await ensureUfwAvailable(ctx);
+      if (ufwReady) {
+        configureFirewall(config, ctx.exec);
+      } else {
+        console.log("Skipping UFW configuration by request.");
+        config.configureUfw = false;
+        printRequiredPorts(config);
       }
-      updateGatewayEnv({ MEDIA_IPV4_ONLY: "0" });
-      config.mediaIpv4Only = "0";
-      console.log("Continuing without IPv6 media block rules.");
+    } else {
+      printRequiredPorts(config);
     }
-  }
 
-  startGatewayStack();
+    if (config.mediaIpv4Only === "1") {
+      try {
+        const applied = applyMediaIpv4OnlyRules(mediaFirewallOptionsFromConfig(config));
+        console.log(`Applied IPv6 media block rules (${applied.backend}).`);
+      } catch (error) {
+        console.error(`IPv6 media block setup failed: ${error.message}`);
+        const proceed = await confirmContinueWithoutMediaBlock();
+        if (!proceed) {
+          throw new Error("Initialization stopped because media IPv4-only firewall rules were not applied.");
+        }
+        config.mediaIpv4Only = "0";
+        console.log("Continuing without IPv6 media block rules.");
+      }
+    }
+  });
 
-  if (config.tlsMode === "letsencrypt") {
-    runLetsEncrypt(config);
-  }
+  await ctx.step("TLS", async () => {
+    if (config.tlsMode === "custom") {
+      const custom = provisionCustomCert(config);
+      tlsCertPath = custom.certPath;
+      tlsKeyPath = custom.keyPath;
+    } else if (config.tlsMode === "dev-self-signed") {
+      tlsCertPath = path.join(SSL_DIR, "dev-fullchain.pem");
+      tlsKeyPath = path.join(SSL_DIR, "dev-privkey.pem");
+      generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 30, ctx.exec);
+    } else {
+      tlsCertPath = path.join(SSL_DIR, "bootstrap-fullchain.pem");
+      tlsKeyPath = path.join(SSL_DIR, "bootstrap-privkey.pem");
+      generateSelfSigned(tlsCertPath, tlsKeyPath, config.domain, 1, ctx.exec);
+    }
 
-  installGatewayService();
+    const envContent = renderEnvContent(config, tlsCertPath, tlsKeyPath);
+    writeFileWithMode(ENV_PATH, envContent, 0o600);
+    writeComposeTemplate();
+  });
+
+  await ctx.step("Start", async () => {
+    startGatewayStack(ctx.exec);
+    if (config.tlsMode === "letsencrypt") {
+      runLetsEncrypt(config, ctx.exec);
+    }
+    installGatewayService(ctx.exec);
+  });
+
+  await ctx.step("Done", async () => {});
 
   console.log("\nGateway initialized.");
   console.log(`WSS URL: wss://${config.domain}`);
   if (config.turnMode !== "none") {
     console.log(`TURN credentials URL: https://${config.domain}/turn-credentials`);
+  }
+  if (!ctx.verbose) {
+    console.log(`Install log: ${ctx.logPath}`);
   }
 }
 
@@ -940,7 +1227,7 @@ function statusCommand() {
 
   console.log("\nConfig summary:");
   console.log(`DOMAIN=${envMap.DOMAIN || ""}`);
-  console.log(`BITCALL_ENV=${envMap.BITCALL_ENV || "production"}`);
+  console.log(`BITCALL_ENV=${envMap.BITCALL_ENV || "dev"}`);
   console.log(`ROUTING_MODE=${envMap.ROUTING_MODE || "universal"}`);
   console.log(`SIP_PROVIDER_URI=${envMap.SIP_PROVIDER_URI || ""}`);
   console.log(`DEPLOY_MODE=${envMap.DEPLOY_MODE || ""}`);
@@ -1129,7 +1416,16 @@ function buildProgram() {
     .description("Install and operate Bitcall WebRTC-to-SIP gateway")
     .version(PACKAGE_VERSION);
 
-  program.command("init").description("Run setup wizard and provision gateway").action(initCommand);
+  program
+    .command("init")
+    .description("Run setup wizard and provision gateway")
+    .option("--advanced", "Show advanced configuration prompts")
+    .option("--dev", "Quick dev setup (minimal prompts, permissive defaults)")
+    .option("--production", "Production setup (strict validation enabled)")
+    .option("--domain <domain>", "Gateway domain")
+    .option("--email <email>", "Let's Encrypt email")
+    .option("--verbose", "Stream full installer command output")
+    .action(initCommand);
   program.command("up").description("Start gateway services").action(upCommand);
   program.command("down").description("Stop gateway services").action(downCommand);
   program.command("stop").description("Alias for down").action(downCommand);
@@ -1179,6 +1475,13 @@ async function main(argv = process.argv) {
 
 module.exports = {
   main,
+  normalizeInitProfile,
+  validateProductionConfig,
+  buildDevWarnings,
+  buildQuickFlowDefaults,
+  isOriginWildcard,
+  isSingleProviderConfigured,
+  printRequiredPorts,
 };
 
 if (require.main === module) {
