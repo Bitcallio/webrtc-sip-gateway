@@ -8,6 +8,14 @@ Bitcall WebRTC-to-SIP gateway repository.
 - `cli/`: Linux npm CLI `@bitcall/webrtc-sip-gateway`
 - `.github/workflows/`: CI
 
+## Latest behavior updates
+
+- Kamailio listeners now advertise `GATEWAY_DOMAIN` on WSS/SIP sockets, so
+  Record-Route, Path, and Via headers use the public domain (not `0.0.0.0`).
+- `init` and `reconfigure` now stop the current stack before preflight checks
+  to avoid false port-conflict failures on `:5060`.
+- Docker image includes `sngrep` and `tcpdump` for SIP diagnostics.
+
 ## End-user install (VPS)
 
 ```bash
@@ -96,6 +104,11 @@ curl -k -i -N \
 sudo ss -ltnup | grep -E ':(443|5060|5061)\b'
 sudo systemctl is-enabled bitcall-gateway
 ```
+
+5. Confirm listeners advertise public domain in SIP routing headers
+
+Capture an INVITE and verify `Record-Route`/`Path` use your gateway domain
+instead of `0.0.0.0`.
 
 ## Release operations
 

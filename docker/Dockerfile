@@ -22,7 +22,7 @@ ENV S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
       ca-certificates curl python3 xz-utils \
-      gnupg wget procps iproute2 openssl \
+      gnupg wget procps iproute2 openssl tcpdump sngrep \
   && rm -rf /var/lib/apt/lists/*
 
 # Add RTPengine apt repo (bullseye) maintained by Kamailio community

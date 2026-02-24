@@ -1015,6 +1015,17 @@ async function initCommand(initOptions = {}) {
   printBanner();
   const ctx = createInstallContext(initOptions);
 
+  // If re-running init on an existing installation, stop the current
+  // gateway so our own ports don't fail the preflight check.
+  if (fs.existsSync(ENV_PATH) && fs.existsSync(COMPOSE_PATH)) {
+    console.log("Existing gateway detected. Stopping for re-initialization...\n");
+    try {
+      runCompose(["down"], { stdio: "pipe" });
+    } catch (_e) {
+      // Ignore errors - gateway may already be stopped or corrupted
+    }
+  }
+
   let preflight;
   await ctx.step("Checks", async () => {
     preflight = await runPreflight(ctx);
@@ -1111,6 +1122,17 @@ async function initCommand(initOptions = {}) {
 async function reconfigureCommand(options) {
   ensureInitialized();
   printBanner();
+
+  // Stop the running gateway so ports are free for preflight.
+  if (fs.existsSync(ENV_PATH) && fs.existsSync(COMPOSE_PATH)) {
+    console.log("Stopping current gateway for reconfiguration...\n");
+    try {
+      runCompose(["down"], { stdio: "pipe" });
+    } catch (_e) {
+      // Ignore if compose fails (corrupted state, already stopped)
+    }
+  }
+
   const ctx = createInstallContext(options);
 
   let preflight;

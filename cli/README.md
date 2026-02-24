@@ -2,6 +2,13 @@
 
 Linux-only CLI to install and operate the Bitcall WebRTC-to-SIP gateway.
 
+Latest updates:
+- `init` and `reconfigure` stop an existing stack before preflight checks so
+  the gateway's own `:5060` listener does not trigger false port conflicts.
+- `update` now syncs `BITCALL_GATEWAY_IMAGE` to the CLI target image tag
+  before pulling and restarting.
+- Docker image includes `sngrep` and `tcpdump` for SIP troubleshooting.
+
 ## Install
 
 ```bash
