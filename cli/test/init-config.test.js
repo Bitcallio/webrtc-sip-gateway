@@ -9,6 +9,7 @@ const {
   buildSecurityNotes,
   buildQuickFlowDefaults,
   shouldRequireAllowlist,
+  stripLegacyKamailioVolume,
 } = require("../src/index");
 
 (function testNormalizeInitProfile() {
@@ -99,6 +100,36 @@ const {
       turnApiToken: "",
     })
   );
+})();
+
+(function testStripLegacyKamailioVolumeRemovesMount() {
+  const compose = [
+    "services:",
+    "  gateway:",
+    "    volumes:",
+    "      - ./kamailio:/etc/kamailio:ro",
+    "      - ./acme-webroot:/var/www/acme:ro",
+    "",
+  ].join("\n");
+
+  const result = stripLegacyKamailioVolume(compose);
+  assert.equal(result.changed, true);
+  assert.equal(result.content.includes("/etc/kamailio"), false);
+  assert.equal(result.content.includes("/var/www/acme"), true);
+})();
+
+(function testStripLegacyKamailioVolumeNoop() {
+  const compose = [
+    "services:",
+    "  gateway:",
+    "    volumes:",
+    "      - ./acme-webroot:/var/www/acme:ro",
+    "",
+  ].join("\n");
+
+  const result = stripLegacyKamailioVolume(compose);
+  assert.equal(result.changed, false);
+  assert.equal(result.content, compose);
 })();
 
 console.log("init config tests passed");

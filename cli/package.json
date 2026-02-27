@@ -1,6 +1,6 @@
 {
   "name": "@bitcall/webrtc-sip-gateway",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Linux CLI for bootstrapping and managing the Bitcall WebRTC-to-SIP Gateway",
   "repository": {
     "type": "git",

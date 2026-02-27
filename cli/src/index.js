@@ -1011,6 +1011,30 @@ function writeComposeTemplate(config = {}) {
   writeFileWithMode(COMPOSE_PATH, `${compose}\n`, 0o644);
 }
 
+function stripLegacyKamailioVolume(composeContent) {
+  const lines = composeContent.split(/\r?\n/);
+  const filtered = lines.filter((line) => !line.includes("/etc/kamailio"));
+  if (filtered.length === lines.length) {
+    return { changed: false, content: composeContent };
+  }
+  const content = `${filtered.join("\n").replace(/\n*$/, "")}\n`;
+  return { changed: true, content };
+}
+
+function migrateLegacyComposeIfNeeded() {
+  if (!fs.existsSync(COMPOSE_PATH)) {
+    return false;
+  }
+  const original = fs.readFileSync(COMPOSE_PATH, "utf8");
+  const migrated = stripLegacyKamailioVolume(original);
+  if (!migrated.changed) {
+    return false;
+  }
+  writeFileWithMode(COMPOSE_PATH, migrated.content, 0o644);
+  console.log("Detected legacy /etc/kamailio compose volume override. Removed automatically.");
+  return true;
+}
+
 function provisionCustomCert(config) {
   validateCustomCert(config.customCertPath, config.customKeyPath, config.domain);
 
@@ -1373,6 +1397,7 @@ function runSystemctl(args, fallbackComposeArgs) {
 
 function upCommand() {
   ensureInitialized();
+  migrateLegacyComposeIfNeeded();
   runSystemctl(["start", SERVICE_NAME], ["up", "-d", "--remove-orphans"]);
 }
 
@@ -1383,6 +1408,7 @@ function downCommand() {
 
 function restartCommand() {
   ensureInitialized();
+  migrateLegacyComposeIfNeeded();
   runSystemctl(["reload", SERVICE_NAME], ["restart"]);
 }
 
@@ -1617,6 +1643,7 @@ async function certInstallCommand(options) {
 
 function updateCommand() {
   ensureInitialized();
+  migrateLegacyComposeIfNeeded();
   const envMap = loadEnvFile(ENV_PATH);
   const currentImage = envMap.BITCALL_GATEWAY_IMAGE || "";
   const targetImage = DEFAULT_GATEWAY_IMAGE;
@@ -1861,6 +1888,7 @@ module.exports = {
   buildSecurityNotes,
   buildQuickFlowDefaults,
   shouldRequireAllowlist,
+  stripLegacyKamailioVolume,
   isOriginWildcard,
   isSingleProviderConfigured,
   printRequiredPorts,
