@@ -21,6 +21,8 @@ Bitcall WebRTC-to-SIP gateway repository.
   (with compatibility handling for legacy `--sip-trace` usage).
 - `bitcall-gateway update` now recreates containers after pull so newly pulled
   image layers are actually applied to running services.
+- `bitcall-gateway update` now also renews anonymous volumes so image-shipped
+  Kamailio config updates are not masked by stale `/etc/kamailio` volume data.
 - CLI auto-migrates legacy compose files by removing the stale `/etc/kamailio`
   volume mount that can override image-shipped Kamailio config.
 - Fixed nftables media firewall rule generation for IPv6 media-block mode

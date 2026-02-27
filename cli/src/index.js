@@ -1035,6 +1035,10 @@ function migrateLegacyComposeIfNeeded() {
   return true;
 }
 
+function updateComposeUpArgs() {
+  return ["up", "-d", "--force-recreate", "--renew-anon-volumes", "--remove-orphans"];
+}
+
 function provisionCustomCert(config) {
   validateCustomCert(config.customCertPath, config.customKeyPath, config.domain);
 
@@ -1657,7 +1661,7 @@ function updateCommand() {
   }
 
   runCompose(["pull"], { stdio: "inherit" });
-  runCompose(["up", "-d", "--force-recreate", "--remove-orphans"], { stdio: "inherit" });
+  runCompose(updateComposeUpArgs(), { stdio: "inherit" });
   run("systemctl", ["start", SERVICE_NAME], { check: false, stdio: "ignore" });
 
   console.log(`\n${clr(_c.green, "✓")} Gateway updated to ${clr(_c.bold, PACKAGE_VERSION)}.`);
@@ -1889,6 +1893,7 @@ module.exports = {
   buildQuickFlowDefaults,
   shouldRequireAllowlist,
   stripLegacyKamailioVolume,
+  updateComposeUpArgs,
   isOriginWildcard,
   isSingleProviderConfigured,
   printRequiredPorts,

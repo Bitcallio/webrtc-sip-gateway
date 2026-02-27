@@ -10,6 +10,7 @@ const {
   buildQuickFlowDefaults,
   shouldRequireAllowlist,
   stripLegacyKamailioVolume,
+  updateComposeUpArgs,
 } = require("../src/index");
 
 (function testNormalizeInitProfile() {
@@ -130,6 +131,16 @@ const {
   const result = stripLegacyKamailioVolume(compose);
   assert.equal(result.changed, false);
   assert.equal(result.content, compose);
+})();
+
+(function testUpdateComposeUpArgsRenewsAnonVolumes() {
+  assert.deepEqual(updateComposeUpArgs(), [
+    "up",
+    "-d",
+    "--force-recreate",
+    "--renew-anon-volumes",
+    "--remove-orphans",
+  ]);
 })();
 
 console.log("init config tests passed");
