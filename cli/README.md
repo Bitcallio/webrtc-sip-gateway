@@ -9,6 +9,8 @@ Latest updates:
   the gateway's own `:5060` listener does not trigger false port conflicts.
 - `update` now syncs `BITCALL_GATEWAY_IMAGE` to the CLI target image tag,
   pulls, and force-recreates containers so new image layers are applied.
+- `up`/`restart`/`update` auto-migrate legacy compose files by removing stale
+  `/etc/kamailio` volume mounts that can override image-shipped config.
 - Docker image includes `sngrep` and `tcpdump` for SIP troubleshooting.
 - `sip-trace` opens a live SIP message viewer using `sngrep` in the container
   via compose service execution.
@@ -16,8 +18,8 @@ Latest updates:
   (nft-compatible port ranges and rule action order).
 - Media firewall status now checks both nft and ip6tables marker rules so
   legacy ip6tables protections are reported correctly.
-- In-dialog BYE handling is hardened: BYE requests with broken/missing route-set
-  now attempt alias/usrloc fallback before 404.
+- In-dialog non-ACK handling is hardened: in-dialog requests with broken/missing
+  route-set now attempt alias/usrloc fallback before 404.
 - `TURN_MODE=coturn` now generates a compose stack with a dedicated coturn
   container.
 

@@ -21,13 +21,16 @@ Bitcall WebRTC-to-SIP gateway repository.
   (with compatibility handling for legacy `--sip-trace` usage).
 - `bitcall-gateway update` now recreates containers after pull so newly pulled
   image layers are actually applied to running services.
+- CLI auto-migrates legacy compose files by removing the stale `/etc/kamailio`
+  volume mount that can override image-shipped Kamailio config.
 - Fixed nftables media firewall rule generation for IPv6 media-block mode
   (valid nft port-range syntax + action ordering).
 - Media firewall state detection now checks both nft and ip6tables markers to
   avoid false "disabled" status when legacy ip6tables rules are active.
 - `TURN_MODE=coturn` now writes a compose stack with a dedicated coturn service.
-- In-dialog BYE handling is hardened: if upstream sends BYE with broken/missing
-  route-set, gateway now attempts alias/usrloc fallback before returning 404.
+- In-dialog non-ACK handling is hardened: if upstream sends in-dialog requests
+  with broken/missing route-set, gateway attempts alias/usrloc fallback before
+  returning 404.
 
 ## End-user install (VPS)
 
