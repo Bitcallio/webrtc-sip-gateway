@@ -20,8 +20,8 @@ Latest updates:
   (nft-compatible port ranges and rule action order).
 - Media firewall status now checks both nft and ip6tables marker rules so
   legacy ip6tables protections are reported correctly.
-- In-dialog non-ACK handling is hardened: in-dialog requests with broken/missing
-  route-set now attempt alias/usrloc fallback before 404.
+- In-dialog handling is hardened: in-dialog requests (including 2xx ACK) with
+  broken/missing route-set now attempt alias/usrloc fallback before 404.
 - `TURN_MODE=coturn` now generates a compose stack with a dedicated coturn
   container.
 

@@ -30,9 +30,9 @@ Bitcall WebRTC-to-SIP gateway repository.
 - Media firewall state detection now checks both nft and ip6tables markers to
   avoid false "disabled" status when legacy ip6tables rules are active.
 - `TURN_MODE=coturn` now writes a compose stack with a dedicated coturn service.
-- In-dialog non-ACK handling is hardened: if upstream sends in-dialog requests
-  with broken/missing route-set, gateway attempts alias/usrloc fallback before
-  returning 404.
+- In-dialog handling is hardened: if upstream sends in-dialog requests
+  (including 2xx ACK) with broken/missing route-set, gateway attempts
+  alias/usrloc fallback before returning 404.
 
 ## End-user install (VPS)
 
